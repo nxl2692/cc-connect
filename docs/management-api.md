@@ -192,6 +192,41 @@ Returns system status and summary.
 
 ---
 
+#### GET /api/v1/usage
+
+Returns the live usage snapshot shown at the top of the Web Admin dashboard. Uses the same authentication as other management endpoints and returns `Cache-Control: no-store`. The dashboard polls every 2 seconds, cancels abandoned requests, and preserves the last successful snapshot with a reconnecting notice on errors.
+
+```json
+{
+  "ok": true,
+  "data": {
+    "sampled_at": "2026-11-05T11:30:00+08:00",
+    "window_seconds": 300,
+    "using_users": 1,
+    "recent_users": 1,
+    "processing_sessions": 2,
+    "queued_messages": 0,
+    "users": [{
+      "platform": "wecom",
+      "user_id": "user-123",
+      "user_name": "Alice",
+      "last_seen": "2026-11-05T11:29:50+08:00",
+      "started_at": "2026-11-05T11:29:50+08:00",
+      "projects": ["project-a", "project-b"],
+      "processing_sessions": 2,
+      "queued_messages": 0
+    }]
+  }
+}
+```
+
+- `using_users`: distinct senders with a request being processed or waiting in a queue. Agent startup and permission waits count until the request completes, fails or is cancelled.
+- `recent_users`: distinct senders who sent a message in the last 300 seconds. A long-running request can still be in use after this window expires.
+- `processing_sessions` and `queued_messages`: current requests, not the number of stored historical sessions or idle agent processes. Automated cron, timer and heartbeat turns do not increase the human-user counts.
+- Identity is `(platform, user_id)`, deduplicated across chats, sessions and projects. Equal display names are not merged. Different platforms cannot be assumed to identify the same person. Senders without a platform/user ID are excluded.
+- `users` includes current and recently active people, current first, with project names and timestamps; request contents and reply contents are never included. The endpoint stays responsive during slow agent startup.
+- Activity is tracked in memory from this process's real incoming messages; restarting begins a new activity window. No historical session is assumed to be a live user.
+
 #### POST /api/v1/restart
 
 Triggers a graceful restart. The process will shut down cleanly and exec itself. A "restart successful" message may be sent to the session that initiated the restart (if applicable).

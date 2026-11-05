@@ -72,6 +72,49 @@ func TestCUJ_A8_ImmediateReceiptsDuringStartupAndQueue(t *testing.T) {
 	env.assertReceipts("first", "second")
 }
 
+// CUJ: the management dashboard counts real people during slow startup, a
+// shared-chat queue, and completion. Several requests by one person count once.
+func TestCUJ_I1_LiveUsageAcrossStartupQueueAndCompletion(t *testing.T) {
+	env := newReceiptAckEnv(t, nil)
+	srv := usageTestServer(t, env.engine)
+	send := func(id, user, content string, timestamp int64) {
+		env.engine.ReceiveMessage(env.plat, &Message{
+			SessionKey: "test:shared-chat", Platform: "test", UserID: user, UserName: user,
+			MessageID: id, Content: content, ReplyCtx: id, UserMessageTimeMs: timestamp,
+		})
+	}
+	assertCounts := func(using, recent, processing, queued int) {
+		t.Helper()
+		env.waitFor("live usage counts", 3*time.Second, func() bool {
+			snapshot := usageTestRead(t, srv.URL)
+			return snapshot.UsingUsers == using && snapshot.RecentUsers == recent && snapshot.ProcessingSessions == processing && snapshot.QueuedMessages == queued
+		})
+	}
+	// User action 1: Alice starts a request while external agent startup waits.
+	send("a1", "alice", "private first request", 1000)
+	env.awaitStartup()
+	assertCounts(1, 1, 1, 0)
+	close(env.startup.release)
+	env.awaitSendCount(1)
+	// User action 2: Bob sends a request to the same chat and enters its queue.
+	send("b1", "bob", "private second request", 2000)
+	assertCounts(2, 2, 1, 1)
+	// User action 3: Alice sends another request; the person count stays two.
+	send("a2", "alice", "private third request", 3000)
+	assertCounts(2, 2, 1, 2)
+	env.startup.session.events <- Event{Type: EventResult, Content: "first answer", Done: true}
+	env.awaitVisible("first answer")
+	env.awaitSendCount(2)
+	assertCounts(2, 2, 1, 1)
+	env.startup.session.events <- Event{Type: EventResult, Content: "second answer", Done: true}
+	env.awaitVisible("second answer")
+	env.awaitSendCount(3)
+	assertCounts(1, 2, 1, 0)
+	env.startup.session.events <- Event{Type: EventResult, Content: "third answer", Done: true}
+	env.awaitVisible("third answer")
+	assertCounts(0, 2, 0, 0)
+}
+
 // psSupplementSession echoes the actual supplement while leaving the initial
 // task open. The engine still owns all command routing and turn completion.
 type psSupplementSession struct {

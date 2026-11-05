@@ -9,6 +9,7 @@ import { getStatus, type SystemStatus } from '@/api/status';
 import { listProjects, type ProjectSummary } from '@/api/projects';
 import { listSessions, type Session } from '@/api/sessions';
 import { formatUptime, formatTime } from '@/lib/utils';
+import LiveUsage from '@/components/LiveUsage';
 
 const MAX_ITEMS = 4;
 
@@ -57,15 +58,16 @@ export default function Dashboard() {
   }, [fetchData]);
 
   if (loading && !status) {
-    return <div className="flex items-center justify-center h-64 text-gray-400"><Activity className="animate-pulse" size={24} /></div>;
+    return <div className="space-y-8"><LiveUsage /><div className="flex items-center justify-center h-32 text-gray-400"><Activity className="animate-pulse" size={24} /></div></div>;
   }
 
   if (error) {
-    return <div className="text-center py-16 text-red-500">{error}</div>;
+    return <div className="space-y-8"><LiveUsage /><div className="text-center py-16 text-red-500">{error}</div></div>;
   }
 
   return (
     <div className="space-y-8 animate-fade-in ">
+      <LiveUsage />
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard label={t('dashboard.version')} value={status?.version || '-'} accent />

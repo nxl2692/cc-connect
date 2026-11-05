@@ -368,6 +368,7 @@ type Engine struct {
 	injectSender          bool
 	attachmentSendEnabled bool
 	startedAt             time.Time
+	usage                 usageTracker
 
 	providerSaveFunc        func(providerName string) error
 	providerAddSaveFunc     func(p ProviderConfig) error
@@ -2430,6 +2431,7 @@ func (e *Engine) Stop() error {
 	for k, v := range e.interactiveStates {
 		states[k] = v
 		delete(e.interactiveStates, k)
+		e.usage.observeState(k, nil)
 	}
 	e.interactiveMu.Unlock()
 
@@ -2976,6 +2978,7 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		e.handleMessageRecall(p, msg)
 		return
 	}
+	e.usage.record(msg, time.Now())
 
 	slog.Info("message received",
 		"platform", msg.Platform, "msg_id", msg.MessageID,
@@ -3278,6 +3281,7 @@ sessionLocked:
 	// reset_on_idle_mins is not defeated by heartbeats or unsolicited agent
 	// output running between user messages (#1115).
 	session.TouchUserActivity()
+	e.usage.begin(msg, session, lockGen, time.Now())
 
 	// Ensure an interactiveState entry exists before launching the async
 	// processor so messages arriving during session startup can be queued
@@ -3494,6 +3498,7 @@ func (e *Engine) ensureInteractiveStateForQueueing(key string, p Platform, reply
 			eventsNeedResync: true,
 		}
 	}
+	e.usage.observeState(key, e.interactiveStates[key])
 }
 
 // drainOrphanedQueue is called when a message was queued but the drain loop
@@ -4331,6 +4336,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 
 	e.interactiveMu.Lock()
 	defer e.interactiveMu.Unlock()
+	defer func() { e.usage.observeState(sessionKey, e.interactiveStates[sessionKey]) }()
 
 	state, ok := e.interactiveStates[sessionKey]
 	if ok && state.agentSession != nil && state.agentSession.Alive() {
@@ -4364,6 +4370,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 		// continues outputting while new agent starts (issue #327).
 		e.closeAgentSessionWithTimeout(sessionKey, state.agentSession, state.platform, state.replyCtx)
 		delete(e.interactiveStates, sessionKey)
+		e.usage.observeState(sessionKey, nil)
 		ok = false // prevent reading stale settings below
 	}
 
@@ -4627,6 +4634,7 @@ func (e *Engine) cleanupInteractiveState(sessionKey string, expected ...*interac
 		return
 	}
 	delete(e.interactiveStates, sessionKey)
+	e.usage.observeState(sessionKey, nil)
 	e.interactiveMu.Unlock()
 }
 
@@ -4735,6 +4743,7 @@ func (e *Engine) cleanupInteractiveStateForIdleToken(sessionKey string, expected
 	e.interactiveMu.Lock()
 	if currentState, currentOk := e.interactiveStates[sessionKey]; currentOk && currentState == expected {
 		delete(e.interactiveStates, sessionKey)
+		e.usage.observeState(sessionKey, nil)
 	}
 	e.interactiveMu.Unlock()
 }
@@ -6615,6 +6624,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				state.fromVoice = queued.fromVoice
 				state.currentTurnUserMessageTimeMs = queued.userMessageTimeMs
 				state.mu.Unlock()
+				e.usage.beginQueued(queued, session, lockGen, time.Now())
 
 				// Stop the previous turn's typing indicator
 				if stopTyping != nil {
@@ -6966,6 +6976,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		state.fromVoice = queued.fromVoice
 		state.currentTurnUserMessageTimeMs = queued.userMessageTimeMs
 		state.mu.Unlock()
+		e.usage.beginQueued(queued, session, lockGen, time.Now())
 
 		e.i18n.DetectAndSet(queued.content)
 		prompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)
@@ -10972,6 +10983,7 @@ func (e *Engine) stopInteractiveSessionWithOptions(sessionKey string, notifyQueu
 normalCleanup:
 	state.markStopped()
 	delete(e.interactiveStates, sessionKey)
+	e.usage.observeState(sessionKey, nil)
 	e.interactiveMu.Unlock()
 
 	if pending != nil {
