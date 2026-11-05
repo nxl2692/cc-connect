@@ -82,6 +82,35 @@ allow_from = "*"
 | `bot_secret` | ✅ | 智能机器人 Secret |
 | `ws_url` | ❌ | WebSocket 端点地址（默认 `wss://openws.work.weixin.qq.com`；**私有化部署**时改为你的私有地址，如 `wss://your-wecom-host:port/im_openws?bizid=<id>`） |
 | `allow_from` | ❌ | 允许的用户 ID（默认 `"*"` 允许所有） |
+| `group_reply_quote` | ❌ | 默认 `true`：群聊回答附带原问题的 Markdown 引用摘要，最长 512 字节；单聊与定时推送不添加 |
+| `group_reply_mention` | ❌ | 默认 `true`：群聊回答添加提问人的 `<@userid>` 标记；长回答拆分时仅首段添加。企微智能机器人是否渲染和触发 @ 提醒需客户端实测，可设 `false` 关闭 |
+
+### 群聊回答关联原问题
+
+群聊中，回答及后续消息使用收到消息时的 `headers.req_id`，通过 `aibot_respond_msg` 回复原请求，不再仅凭 `chatid` 用 `aibot_send_msg` 发到群里。每条问题分别保存提问人、原请求及问题摘要，多人同时提问、同一个人连续提问时不会覆盖彼此的引用。
+
+回答正文默认包含提问人标记和原问题摘要，例如（`<@alice>` 的实际渲染取决于企微客户端）：
+
+```text
+<@alice>
+
+> 请分析这条告警
+
+这里是分析结果……
+```
+
+摘要覆盖文本、语音转写、图文附件标记及用户引用的内容；按 UTF-8 字节限制截断，转义原文中的 Markdown 和 `<@...>`，避免摘要产生额外的链接或 @。长回答每段保留问题摘要，并为摘要预留发送字节额度。
+
+**平台边界**：[企微长连接文档](https://developer.work.weixin.qq.com/document/path/101463)要求回复透传原 `req_id`，但没有提供可指定任意原消息 ID 的出站 `quote` 字段，也没有明确保证智能机器人支持 `<@userid>` 的成员提醒。这里提供的是原请求关联和正文引用摘要；不能把它等同于已验证的客户端原生引用框或 @ 通知。Webhook 模式的[主动回复消息文档](https://developer.work.weixin.qq.com/document/path/101138)描述的自动引用行为，不能直接当作长连接模式的保证。使用现有机器人升级后，需要在目标企微客户端验证这两项展示效果。
+
+可在 `[projects.platforms.options]` 分别关闭摘要或 @ 标记：
+
+```toml
+group_reply_quote = true
+group_reply_mention = false
+```
+
+定时任务、跨会话转发等只有会话地址而没有原请求的消息，仍用 `aibot_send_msg`，不会借用历史问题进行引用或 @。
 
 ### 第三步：启动并验证
 

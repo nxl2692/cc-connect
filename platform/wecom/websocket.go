@@ -25,19 +25,21 @@ const (
 // WSPlatform implements core.Platform using the WeChat Work WebSocket long-connection
 // mode (智能机器人长连接). No public URL, no message encryption, no IP allowlist required.
 type WSPlatform struct {
-	botID       string
-	secret      string
-	allowFrom   string
-	wsURL       string // WebSocket endpoint; defaults to wsEndpoint (公有云), 可经 ws_url 覆盖为私有化部署地址
-	conn        *websocket.Conn
-	handler     core.MessageHandler
-	ctx         context.Context
-	cancel      context.CancelFunc
-	mu          sync.Mutex // protects conn writes
-	dedup       core.MessageDedup
-	reqSeq      atomic.Int64 // monotonic counter for generating unique req_id
-	missedPong  atomic.Int32 // consecutive heartbeat acks not received
-	pendingAcks sync.Map     // req_id -> chan wsAckResult, for sequential send with ack waiting
+	botID             string
+	secret            string
+	allowFrom         string
+	groupReplyQuote   bool
+	groupReplyMention bool
+	wsURL             string // WebSocket endpoint; defaults to wsEndpoint (公有云), 可经 ws_url 覆盖为私有化部署地址
+	conn              *websocket.Conn
+	handler           core.MessageHandler
+	ctx               context.Context
+	cancel            context.CancelFunc
+	mu                sync.Mutex // protects conn writes
+	dedup             core.MessageDedup
+	reqSeq            atomic.Int64 // monotonic counter for generating unique req_id
+	missedPong        atomic.Int32 // consecutive heartbeat acks not received
+	pendingAcks       sync.Map     // req_id -> chan wsAckResult, for sequential send with ack waiting
 }
 
 const (
@@ -49,10 +51,12 @@ var errWSAckTimeout = errors.New("wecom-ws: ack timeout")
 
 // wsReplyContext holds the context needed to reply to a specific message.
 type wsReplyContext struct {
-	reqID    string // req_id from headers of aibot_msg_callback
-	chatID   string // chatid for aibot_send_msg
-	chatType string // chattype: "single" or "group"
-	userID   string // from.userid
+	reqID    string      // req_id from headers of aibot_msg_callback
+	chatID   string      // chatid for aibot_send_msg
+	chatType string      // chattype: "single" or "group"
+	userID   string      // from.userid
+	question string      // bounded, escaped preview of this callback's message
+	sendMu   *sync.Mutex // serializes sends sharing the callback req_id / ACK key
 }
 
 // --- WebSocket protocol frame types (matching official SDK) ---
@@ -130,12 +134,22 @@ func newWebSocket(opts map[string]any) (core.Platform, error) {
 	if wsURL == "" {
 		wsURL = wsEndpoint
 	}
+	groupReplyQuote, err := wsBoolOption(opts, "group_reply_quote", true)
+	if err != nil {
+		return nil, err
+	}
+	groupReplyMention, err := wsBoolOption(opts, "group_reply_mention", true)
+	if err != nil {
+		return nil, err
+	}
 
 	return &WSPlatform{
-		botID:     botID,
-		secret:    secret,
-		allowFrom: allowFrom,
-		wsURL:     wsURL,
+		botID:             botID,
+		secret:            secret,
+		allowFrom:         allowFrom,
+		wsURL:             wsURL,
+		groupReplyQuote:   groupReplyQuote,
+		groupReplyMention: groupReplyMention,
 	}, nil
 }
 
@@ -403,6 +417,9 @@ func (p *WSPlatform) handleMsgCallback(frame wsFrame) {
 		}
 		return
 	}
+	// Authorized replies run in the handler goroutine. Unauthorized replies
+	// above run on the reader goroutine and must not wait for an ACK there.
+	rctx.sendMu = &sync.Mutex{}
 
 	sessionKey := fmt.Sprintf("wecom:%s:%s", chatID, body.From.UserID)
 
@@ -415,6 +432,7 @@ func (p *WSPlatform) handleMsgCallback(frame wsFrame) {
 	}
 
 	current, quoted := wsCollectInboundParts(&body)
+	rctx.question = wsQuestionPreview(&body, current, quoted, p.botID)
 	quotedContent := formatWSInboundContext(&body, quoted)
 
 	switch body.MsgType {
@@ -479,6 +497,10 @@ func (p *WSPlatform) Reply(ctx context.Context, rctx any, content string) error 
 	if content == "" {
 		return nil
 	}
+	prefix := p.wsGroupReplyPrefix(rc, true)
+	if len(prefix)+len(content) > 20480 {
+		return p.Send(ctx, rctx, content)
+	}
 
 	streamID := p.generateReqID("stream")
 	frame := map[string]any{
@@ -489,11 +511,19 @@ func (p *WSPlatform) Reply(ctx context.Context, rctx any, content string) error 
 			"stream": map[string]any{
 				"id":      streamID,
 				"finish":  true,
-				"content": content,
+				"content": prefix + content,
 			},
 		},
 	}
-	if err := p.writeJSON(frame); err != nil {
+	var err error
+	if rc.chatType == "group" && rc.sendMu != nil {
+		rc.sendMu.Lock()
+		err = p.writeAndWaitAckStrict(ctx, frame, rc.reqID, wsAckTimeout)
+		rc.sendMu.Unlock()
+	} else {
+		err = p.writeJSON(frame)
+	}
+	if err != nil {
 		slog.Error("wecom-ws: reply failed", "user", rc.userID, "error", err)
 		return err
 	}
@@ -501,9 +531,9 @@ func (p *WSPlatform) Reply(ctx context.Context, rctx any, content string) error 
 	return nil
 }
 
-// Send sends a proactive message via aibot_send_msg (markdown format).
-// Used for follow-up messages and cron-triggered messages where no req_id is available.
-// Markdown is natively supported.
+// Send keeps group follow-ups associated with their triggering callback via
+// aibot_respond_msg. Proactive messages without a callback and private messages
+// continue to use aibot_send_msg. Both paths use markdown format.
 func (p *WSPlatform) Send(ctx context.Context, rctx any, content string) error {
 	rc, ok := rctx.(wsReplyContext)
 	if !ok {
@@ -516,21 +546,44 @@ func (p *WSPlatform) Send(ctx context.Context, rctx any, content string) error {
 		return fmt.Errorf("wecom-ws: chatID is empty, cannot send proactive message")
 	}
 
-	chunks := splitByBytes(content, 2000)
+	// A callback req_id is also the ACK correlation key. Two concurrent sends
+	// for the same callback must not replace each other's pending ACK channel.
+	boundReply := rc.chatType == "group" && rc.reqID != ""
+	if boundReply && rc.sendMu != nil {
+		rc.sendMu.Lock()
+		defer rc.sendMu.Unlock()
+	}
+	prefix := p.wsGroupReplyPrefix(rc, true)
+	chunks := splitByBytes(content, 2000-len(prefix))
 	for i, chunk := range chunks {
 		reqID := p.generateReqID("aibot_send_msg")
-		frame := map[string]any{
-			"cmd":     "aibot_send_msg",
-			"headers": map[string]string{"req_id": reqID},
-			"body": map[string]any{
-				"chatid":  rc.chatID,
-				"msgtype": "markdown",
-				"markdown": map[string]string{
-					"content": chunk,
-				},
-			},
+		cmd := "aibot_send_msg"
+		if boundReply {
+			reqID = rc.reqID
+			cmd = "aibot_respond_msg"
 		}
-		if err := p.writeAndWaitAck(ctx, frame, reqID); err != nil {
+		// Quote every chunk so long answers remain identifiable, but only @
+		// once per Send call to avoid a notification for each split chunk.
+		prefix = p.wsGroupReplyPrefix(rc, i == 0)
+		body := map[string]any{
+			"msgtype":  "markdown",
+			"markdown": map[string]string{"content": prefix + chunk},
+		}
+		if !boundReply {
+			body["chatid"] = rc.chatID
+		}
+		frame := map[string]any{
+			"cmd":     cmd,
+			"headers": map[string]string{"req_id": reqID},
+			"body":    body,
+		}
+		var err error
+		if boundReply {
+			err = p.writeAndWaitAckStrict(ctx, frame, reqID, wsAckTimeout)
+		} else {
+			err = p.writeAndWaitAck(ctx, frame, reqID)
+		}
+		if err != nil {
 			slog.Error("wecom-ws: send failed", "user", rc.userID, "chunk", i, "error", err)
 			return err
 		}
