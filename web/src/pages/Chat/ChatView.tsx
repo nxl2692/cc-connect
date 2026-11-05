@@ -19,6 +19,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { cn } from '@/lib/utils';
+import SessionProgress from '@/pages/Chat/SessionProgress';
 
 // ── Markdown renderers ───────────────────────────────────────
 
@@ -330,11 +331,10 @@ export default function ChatView() {
     if (!projectName) return;
     setLoading(true);
     try {
-      const [{ sessions: allSessions }, cfg] = await Promise.all([
-        listSessions(projectName),
-        fetchBridgeConfig(),
-      ]);
+      const cfg = await fetchBridgeConfig();
       setBridgeCfg(cfg);
+      if (!cfg) return;
+      const { sessions: allSessions } = await listSessions(projectName);
       const sorted = (allSessions || []).sort(
         (a, b) => (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || ''),
       );
@@ -566,6 +566,8 @@ export default function ChatView() {
   }, [bridgeStatus, bridgeSend]);
 
   const canSend = bridgeStatus === 'connected';
+
+  if (!bridgeCfg) return <SessionProgress />;
 
   if (loading && !currentSession && sessions.length === 0) {
     return <div className="flex items-center justify-center h-64 text-gray-400 animate-pulse">Loading...</div>;

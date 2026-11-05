@@ -125,6 +125,8 @@ level = "info" # debug, info, warn, error
 # 设为 0 表示不截断（显示完整内容）。
 
 # [display]
+# final_only = false        # Only send terminal answers to IM; web progress stays available (global setting).
+#                           # 仅向聊天平台发送最终结果；网页可查看进度。权限、提问和错误提示仍保留（全局设置）。
 # mode = "full"             # Display mode: "full" (default), "compact", or "quiet"
 # card_mode = "legacy"      # Card rendering: "legacy" (default) or "rich" (Feishu Card 2.0)
 #                           # full: show thinking + tool messages as separate messages

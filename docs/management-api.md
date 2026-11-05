@@ -227,6 +227,20 @@ Returns the live usage snapshot shown at the top of the Web Admin dashboard. Use
 - `users` includes current and recently active people, current first, with project names and timestamps; request contents and reply contents are never included. The endpoint stays responsive during slow agent startup.
 - Activity is tracked in memory from this process's real incoming messages; restarting begins a new activity window. No historical session is assumed to be a live user.
 
+#### GET /api/v1/projects/{name}/progress
+
+Read-only execution progress for messages received on the original chat platform. Uses management Bearer authentication and `Cache-Control: no-store`. It works with **Bridge disabled** and never starts an agent, sends a message, or changes the active session. Non-GET requests return 405.
+
+Optional query parameters: `key` selects a session from the response; `user` and `platform` filter the list. An unknown project or selected key returns 404.
+
+The response data contains `sampled_at`, `read_only: true`, `sessions` (summaries), and `selected` (details or null). Details contain the current request, status, turn number, timestamps, tool count, `events`, streaming `preview`, final `result`, and the last 50 saved history entries. Statuses are `idle`, `starting`, `thinking`, `working`, `responding`, `waiting_permission`, `waiting_input`, `completed`, `error`, and `interrupted`.
+
+The Web Admin dashboard links each user's name to `/progress/{name}?user=...&platform=...`. The page polls once per second while visible. The session page also opens this read-only view when Bridge is disabled. Permission and question prompts must be answered in the original chat.
+
+Set the global `[display] final_only = true` to suppress IM thinking, tool output, streaming previews/cards, instant replies, and intermediate assistant text. The terminal agent result is sent to IM; accumulated text is used only when that result is empty. Permission prompts, user questions, errors, command responses, and queue notifications remain available to prevent stalled or invisible requests. The default is false.
+
+Progress is an in-memory projection of the event stream already consumed by the engine. It retains up to 64 sessions (in-flight sessions are never evicted), 96 recent events per session, 16,000 characters of recent streaming output, and 32,000 characters of the final answer. A new turn replaces the previous turn's live timeline. Restarting clears timelines; saved conversation history remains available. Historical sessions without captured events display an explanatory notice. Tool summaries receive basic secret redaction and truncation; private reasoning payloads and raw permission arguments are not retained in progress events. Access to the management token grants access to conversation content, as with the existing session/history APIs.
+
 #### POST /api/v1/restart
 
 Triggers a graceful restart. The process will shut down cleanly and exec itself. A "restart successful" message may be sent to the session that initiated the restart (if applicable).

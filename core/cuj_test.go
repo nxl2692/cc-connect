@@ -2760,3 +2760,95 @@ func TestCUJ_H5_WorkspaceSkillDiscoveryAndInvocation(t *testing.T) {
 	sent := p.getSent()
 	assertWorkspaceSkills(t, sent[len(sent)-1], "b", "a")
 }
+
+// CUJ: submit work, open its live read-only progress, and queue two follow-ups.
+// Only canonical final answers reach IM; previews and tool events stay on web.
+func TestCUJ_I6_ReadOnlyProgressWithFinalOnlyDelivery(t *testing.T) {
+	p := &progressTestPlatform{cujStreamingPlatform: cujStreamingPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}}
+	a := &receiptStartAgent{
+		session: &receiptAgentSession{queuingAgentSession: newQueuingSession("progress-session")},
+		entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	e := NewEngine("receipt", a, []Platform{p}, t.TempDir()+"/sessions.json", LangEnglish)
+	t.Cleanup(func() { _ = e.Stop() })
+	e.SetDisplayConfig(DisplayCfg{FinalOnly: true, Mode: "full", CardMode: "rich", ThinkingMessages: true, ToolMessages: true})
+	e.SetInstantReply(InstantReplyCfg{Enabled: true, Content: "instant confirmation"})
+	e.SetStreamPreviewCfg(StreamPreviewCfg{Enabled: true})
+	e.SetShowContextIndicator(false)
+	e.SetShowWorkdirIndicator(false)
+	e.SetReplyFooterEnabled(false)
+	env := &receiptAckEnv{cujEnv: &cujEnv{t: t, engine: e, plat: &p.stubPlatformEngine}, startup: a}
+	srv := usageTestServer(t, e)
+	send := func(id, user, text string) {
+		e.ReceiveMessage(p, &Message{SessionKey: "test:shared", Platform: "test", UserID: user, UserName: user, MessageID: id, ReplyCtx: id, Content: text})
+	}
+	selected := func() *ProgressSession { return progressTestRead(t, srv.URL, "").Selected }
+	awaitProgress := func(why string, check func(*ProgressSession) bool) {
+		t.Helper()
+		env.waitFor(why, 3*time.Second, func() bool { v := selected(); return v != nil && check(v) })
+	}
+	// Action 1: Alice starts a task and opens progress during slow startup.
+	send("first", "alice", "first task")
+	env.awaitStartup()
+	awaitProgress("startup visible without Bridge", func(v *ProgressSession) bool { return v.Status == "starting" && v.UserID == "alice" })
+	close(a.release)
+	env.awaitSendCount(1)
+	a.session.events <- Event{Type: EventThinking, Content: "private reasoning"}
+	a.session.events <- Event{Type: EventToolUse, ToolName: "shell", ToolInput: "inspect repository"}
+	a.session.events <- Event{Type: EventToolResult, ToolName: "shell", ToolResult: "inspection complete", ToolStatus: "success"}
+	a.session.events <- Event{Type: EventText, Content: "intermediate output"}
+	awaitProgress("live tool timeline and output", func(v *ProgressSession) bool {
+		return len(v.Events) == 3 && v.ToolCount == 1 && v.Preview == "intermediate output"
+	})
+	if got := p.getSent(); len(got) != 0 {
+		t.Fatalf("IM received progress before final: %v", got)
+	}
+	// Action 2: Bob submits a follow-up to the shared queue.
+	send("second", "bob", "second task")
+	env.awaitVisible(e.i18n.T(MsgMessageQueued))
+	a.session.events <- Event{Type: EventResult, Content: "first final", Done: true}
+	env.awaitVisible("first final")
+	env.awaitSendCount(2)
+	awaitProgress("queue changes owner and clears prior output", func(v *ProgressSession) bool {
+		return v.UserID == "bob" && v.Turn == 2 && v.Preview == "" && v.Result == "" && len(v.Events) == 0
+	})
+	// Permission prompts remain actionable in IM, without flushing text.
+	a.session.events <- Event{Type: EventPermissionRequest, ToolName: "shell", ToolInput: "permission input", RequestID: "perm-1"}
+	awaitProgress("permission wait shown on web", func(v *ProgressSession) bool { return v.Status == "waiting_permission" })
+	env.awaitVisible("permission input")
+	send("allow", "bob", "allow")
+	awaitProgress("permission resolution clears waiting status", func(v *ProgressSession) bool { return v.Status == "working" })
+	// Action 3: Alice queues another task while Bob's turn is active.
+	send("third", "alice", "third task")
+	env.waitFor("third request queued", 3*time.Second, func() bool { return usageTestRead(t, srv.URL).QueuedMessages == 1 })
+	a.session.events <- Event{Type: EventText, Content: "second intermediate"}
+	a.session.events <- Event{Type: EventResult, Content: "second final", Done: true}
+	env.awaitVisible("second final")
+	env.awaitSendCount(3)
+	a.session.events <- Event{Type: EventResult, Content: "third final", Done: true}
+	env.awaitVisible("third final")
+	awaitProgress("completed answer retained", func(v *ProgressSession) bool {
+		return v.Status == "completed" && v.Finished && v.UserID == "alice" && v.Turn == 3 && v.Result == "third final"
+	})
+	for _, answer := range []string{"first final", "second final", "third final"} {
+		count := 0
+		for _, message := range p.getSent() {
+			if message == answer {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("final answer %q delivered %d times: %v", answer, count, p.getSent())
+		}
+	}
+	for _, message := range p.getSent() {
+		for _, forbidden := range []string{"intermediate", "private reasoning", "inspect repository", "inspection complete", "instant confirmation"} {
+			if strings.Contains(message, forbidden) {
+				t.Fatalf("IM leaked progress: %q", message)
+			}
+		}
+	}
+	if p.cards.Load() != 0 || len(p.getPreviewOpens()) != 0 || len(p.getPreviewUpdates()) != 0 {
+		t.Fatal("final-only mode created an IM streaming card/preview")
+	}
+}

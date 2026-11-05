@@ -4,7 +4,7 @@
     "projects": "專案",
     "providers": "服務商",
     "sessions": "工作階段",
-    "chat": "對話",
+    "chat": "工作階段進度",
     "cron": "排程工作",
     "bridge": "橋接",
     "skills": "技能",
@@ -481,5 +481,46 @@
     "updated": "每 2 秒重新整理 · 更新於 {{time}}",
     "showAll": "顯示全部 {{count}} 人",
     "collapse": "收合清單"
+  },
+  "progress": {
+    "view": "查看進度",
+    "readOnly": "唯讀執行進度",
+    "description": "查看原聊天平台發起的任務。本頁唯讀，不能傳送訊息或命令；企微僅接收最終結果。",
+    "back": "返回工作階段",
+    "search": "搜尋使用者或工作階段",
+    "allSessions": "顯示全部工作階段",
+    "noSessions": "尚無符合的工作階段",
+    "toolCount": "工具呼叫 {{count}} 次",
+    "request": "目前請求",
+    "timeline": "執行過程",
+    "waitingEvents": "正在等待執行事件…",
+    "historical": "歷史工作階段，升級前的工具執行過程未記錄。",
+    "respondElsewhere": "請回到原聊天平台回答問題或確認權限。",
+    "result": "最終結果",
+    "output": "正在產生的輸出",
+    "history": "已儲存的對話記錄",
+    "updated": "每秒重新整理 · 更新於 {{time}}",
+    "assistant": "機器人",
+    "status": {
+      "starting": "啟動中",
+      "thinking": "思考中",
+      "working": "執行中",
+      "responding": "產生結果中",
+      "waiting_permission": "等待授權",
+      "waiting_input": "等待回答",
+      "completed": "已完成",
+      "error": "執行失敗",
+      "interrupted": "已中斷",
+      "idle": "歷史記錄"
+    },
+    "event": {
+      "thinking": "思考狀態",
+      "tool_use": "呼叫工具",
+      "tool_result": "工具執行結果",
+      "permission_request": "需要授權",
+      "user_input_request": "需要回答",
+      "error": "執行錯誤",
+      "hook_rejected": "重新產生輸出"
+    }
   }
 }

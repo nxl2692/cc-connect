@@ -38,3 +38,15 @@ export const switchSession = (project: string, body: { session_key: string; sess
   api.post(`/projects/${project}/sessions/switch`, body);
 export const sendMessage = (project: string, body: { session_key: string; message: string }) =>
   api.post(`/projects/${project}/send`, body);
+
+export interface ProgressEvent { kind: string; time: string; tool?: string; text?: string; status?: string }
+export interface ProgressSession {
+  key: string; session_id: string; session_key: string; name: string;
+  platform: string; user_id: string; user_name: string; chat_name: string;
+  status: string; started_at: string; updated_at: string; turn: number;
+  tool_count: number; finished: boolean; request?: string; preview?: string; result?: string;
+  events?: ProgressEvent[]; history?: { role: string; content: string; timestamp: string }[];
+}
+export interface ProgressSnapshot { sampled_at: string; read_only: boolean; sessions: ProgressSession[]; selected: ProgressSession | null }
+export const getProjectProgress = (project: string, params: Record<string,string>, signal?: AbortSignal) =>
+  api.get<ProgressSnapshot>(`/projects/${encodeURIComponent(project)}/progress`, params, signal);

@@ -4,7 +4,7 @@
     "projects": "プロジェクト",
     "providers": "プロバイダー",
     "sessions": "セッション",
-    "chat": "チャット",
+    "chat": "セッション",
     "cron": "スケジュールジョブ",
     "bridge": "ブリッジ",
     "skills": "スキル",
@@ -481,5 +481,46 @@
     "updated": "2秒ごとに更新 · 最終更新 {{time}}",
     "showAll": "全{{count}}人を表示",
     "collapse": "折りたたむ"
+  },
+  "progress": {
+    "view": "進捗を見る",
+    "readOnly": "読み取り専用の進捗",
+    "description": "元のチャットで開始したタスクを確認します。このページからメッセージやコマンドは送信できません。",
+    "back": "セッションへ戻る",
+    "search": "ユーザーやセッションを検索",
+    "allSessions": "すべてのセッション",
+    "noSessions": "一致するセッションはありません",
+    "toolCount": "ツール呼び出し {{count}} 回",
+    "request": "現在のリクエスト",
+    "timeline": "実行履歴",
+    "waitingEvents": "実行イベントを待っています…",
+    "historical": "過去のセッションです。更新前のツールイベントは記録されていません。",
+    "respondElsewhere": "元のチャットで回答または承認してください。",
+    "result": "最終結果",
+    "output": "生成中の出力",
+    "history": "保存済みの会話",
+    "updated": "毎秒更新 · 最終更新 {{time}}",
+    "assistant": "アシスタント",
+    "status": {
+      "starting": "起動中",
+      "thinking": "思考中",
+      "working": "実行中",
+      "responding": "出力生成中",
+      "waiting_permission": "承認待ち",
+      "waiting_input": "回答待ち",
+      "completed": "完了",
+      "error": "失敗",
+      "interrupted": "中断",
+      "idle": "保存済み"
+    },
+    "event": {
+      "thinking": "思考状態",
+      "tool_use": "ツール開始",
+      "tool_result": "ツール結果",
+      "permission_request": "承認が必要",
+      "user_input_request": "回答が必要",
+      "error": "エラー",
+      "hook_rejected": "出力を再生成"
+    }
   }
 }

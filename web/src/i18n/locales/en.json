@@ -4,7 +4,7 @@
     "projects": "Projects",
     "providers": "Providers",
     "sessions": "Sessions",
-    "chat": "Chat",
+    "chat": "Sessions",
     "cron": "Cron",
     "bridge": "Bridge",
     "skills": "Skills",
@@ -481,5 +481,46 @@
     "updated": "Refreshes every 2 seconds · Updated {{time}}",
     "showAll": "Show all {{count}} people",
     "collapse": "Show fewer"
+  },
+  "progress": {
+    "view": "Execution progress",
+    "readOnly": "Read-only progress",
+    "description": "Watch requests from the original chat platform. No messages or commands can be sent from this page.",
+    "back": "Back to sessions",
+    "search": "Search sessions",
+    "allSessions": "Show all sessions",
+    "noSessions": "No matching sessions yet",
+    "toolCount": "Tools: {{count}}",
+    "request": "Current request",
+    "timeline": "Execution timeline",
+    "waitingEvents": "Waiting for execution events…",
+    "historical": "Historical session. Earlier tool events were not recorded.",
+    "respondElsewhere": "Reply or approve in the original chat platform.",
+    "result": "Final result",
+    "output": "Output in progress",
+    "history": "Saved conversation",
+    "updated": "Refreshes every second · Updated {{time}}",
+    "assistant": "Assistant",
+    "status": {
+      "starting": "Starting",
+      "thinking": "Thinking",
+      "working": "Working",
+      "responding": "Generating output",
+      "waiting_permission": "Awaiting approval",
+      "waiting_input": "Awaiting reply",
+      "completed": "Completed",
+      "error": "Failed",
+      "interrupted": "Interrupted",
+      "idle": "Saved"
+    },
+    "event": {
+      "thinking": "Thinking",
+      "tool_use": "Tool started",
+      "tool_result": "Tool finished",
+      "permission_request": "Approval needed",
+      "user_input_request": "Reply needed",
+      "error": "Error",
+      "hook_rejected": "Draft replaced"
+    }
   }
 }

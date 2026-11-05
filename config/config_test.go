@@ -3605,3 +3605,29 @@ func TestRemoveGlobalProvider_CleansUpProviderRefs(t *testing.T) {
 		t.Errorf("proj2 provider_refs: want [], got %v", refs2)
 	}
 }
+
+// Explicit final-only delivery is opt-in, independent from quiet display mode.
+func TestDisplayFinalOnlyParsing(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		var cfg Config
+		text := "[display]\nmode = \"quiet\"\nfinal_only = "
+		if enabled {
+			text += "true"
+		} else {
+			text += "false"
+		}
+		if _, err := toml.Decode(text, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Display.FinalOnly != enabled {
+			t.Fatalf("final_only = %t, want %t", cfg.Display.FinalOnly, enabled)
+		}
+	}
+	var cfg Config
+	if _, err := toml.Decode("[display]\nmode = \"quiet\"", &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Display.FinalOnly {
+		t.Fatal("final-only delivery unexpectedly enabled by default")
+	}
+}

@@ -330,6 +330,7 @@ var RestartCh = make(chan RestartRequest, 1)
 // DisplayCfg controls how intermediate messages are surfaced.
 // A value of -1 means "use default", 0 means "no truncation".
 type DisplayCfg struct {
+	FinalOnly        bool   // terminal IM answers; management progress remains available
 	Mode             string // "full" (default), "compact", or "quiet" — thinking/tool visibility
 	CardMode         string // "legacy" (default) or "rich" (Card 2.0 Feishu)
 	ThinkingMessages bool
@@ -369,6 +370,7 @@ type Engine struct {
 	attachmentSendEnabled bool
 	startedAt             time.Time
 	usage                 usageTracker
+	progress              progressStore
 
 	providerSaveFunc        func(providerName string) error
 	providerAddSaveFunc     func(p ProviderConfig) error
@@ -4024,6 +4026,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		if !unlocked {
 			session.Unlock(lockGen)
 		}
+		e.progress.end(session, lockGen, time.Now())
 	}()
 
 	if e.ctx.Err() != nil {
@@ -4031,6 +4034,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	}
 
 	turnStart := time.Now()
+	e.progress.begin(msg, session, lockGen, turnStart)
 
 	e.i18n.DetectAndSet(msg.Content)
 	session.AddHistory("user", msg.Content)
@@ -4069,6 +4073,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	defer stopRecallMonitor()
 
 	if state.agentSession == nil {
+		e.progress.observe(session, lockGen, Event{Type: EventError, Content: e.i18n.T(MsgFailedToStartAgentSession)}, time.Now())
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgFailedToStartAgentSession))
 		return
 	}
@@ -5450,7 +5455,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 	var cardThinkingText string        // latest thinking text
 	var cardAnswerText strings.Builder // accumulated answer text
 
-	if scp, ok := state.platform.(StreamingCardPlatform); ok {
+	if scp, ok := state.platform.(StreamingCardPlatform); ok && !e.display.FinalOnly {
 		if sc, err := scp.CreateStreamingCard(e.ctx, state.replyCtx); err != nil {
 			slog.Warn("streaming card creation failed, falling back to normal messages", "error", err)
 		} else {
@@ -5458,14 +5463,18 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			slog.Info("streaming card created for turn", "session", sessionKey)
 		}
 	}
-	sp := newStreamPreview(e.streamPreview, state.platform, state.replyCtx, e.ctx, workspaceRenderer)
+	previewCfg := e.streamPreview
+	if e.display.FinalOnly {
+		previewCfg.Enabled = false
+	}
+	sp := newStreamPreview(previewCfg, state.platform, state.replyCtx, e.ctx, workspaceRenderer)
 	cp := newCompactProgressWriter(e.ctx, state.platform, state.replyCtx, e.agent.Name(), e.i18n.CurrentLang(), workspaceRenderer)
 	state.mu.Unlock()
 
 	// Send instant confirmation reply if enabled and no streaming card is active.
 	// Streaming cards provide their own "processing" indicator, so instant reply
 	// is only needed when the platform doesn't support cards or card creation failed.
-	if e.instantReply.Enabled && streamCard == nil {
+	if e.instantReply.Enabled && streamCard == nil && !e.display.FinalOnly {
 		replyContent := e.instantReply.Content
 		if replyContent == "" {
 			replyContent = e.i18n.T(MsgStarting)
@@ -5508,6 +5517,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		case err := <-pendingSend:
 			pendingSend = nil
 			if err != nil {
+				e.progress.observe(session, lockGen, Event{Type: EventError, Error: err}, time.Now())
 				slog.Error("failed to send prompt", "error", err, "session_key", sessionKey)
 				sp.discard()
 				if stopTyping != nil {
@@ -5526,6 +5536,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 			continue
 		case <-idleCh:
+			e.progress.observe(session, lockGen, Event{Type: EventError, Content: "agent session timed out (no response)"}, time.Now())
 			slog.Error("agent session idle timeout: no events for too long, killing session",
 				"session_key", sessionKey, "timeout", e.eventIdleTimeout, "elapsed", time.Since(turnStart))
 			cp.Finalize(ProgressCardStateFailed)
@@ -5538,6 +5549,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			e.cleanupInteractiveState(sessionKey, state)
 			return
 		case <-turnDeadlineCh:
+			e.progress.observe(session, lockGen, Event{Type: EventError, Content: "agent turn exceeded maximum time"}, time.Now())
 			elapsed := time.Since(turnStart)
 			slog.Warn("agent turn exceeded max_turn_time: sending stop signal, will force-kill if needed",
 				"session_key", sessionKey, "max_turn_time", e.maxTurnTime, "elapsed", elapsed)
@@ -5628,7 +5640,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		richCardSupporter, hasRichCard := p.(RichCardSupporter)
 		// Card 2.0 rich-card path is opt-in via [display] mode = "rich".
 		// Default "legacy" keeps upstream behavior for all platforms.
-		if e.display.CardMode != "rich" {
+		if e.display.CardMode != "rich" || e.display.FinalOnly {
 			hasRichCard = false
 		}
 		richMarkdownResolver, hasRichMarkdownResolver := p.(RichCardMarkdownResolver)
@@ -5642,6 +5654,16 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			return richCardSupporter.BuildRichCard(status, title, steps, resolveRichCardMarkdown(markdown, !streaming), streaming, statusFooter)
 		}
 
+		e.progress.observe(session, lockGen, event, time.Now())
+		if e.display.FinalOnly {
+			switch event.Type {
+			case EventToolUse:
+				toolCount++
+				continue
+			case EventThinking, EventToolResult, EventModelSwitch:
+				continue
+			}
+		}
 		switch event.Type {
 		case EventModelSwitch:
 			e.relayModelSwitch(p, replyCtx, sessionKey, event.ModelSwitch)
@@ -5932,7 +5954,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if e.display.HideAgentFooter {
 				content = stripAgentFooterLines(content)
 			}
-			if content != "" && !isEllipsisOnly(content) {
+			if e.display.FinalOnly {
+				textParts = append(textParts, content)
+			} else if content != "" && !isEllipsisOnly(content) {
 				// Pre-compute silentHold transition including this chunk so the
 				// rich-card path doesn't leak a preview that gets recalled at
 				// end-of-stream when the text resolves to bare NO_REPLY (Lark
@@ -6085,12 +6109,13 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					Behavior:     "allow",
 					UpdatedInput: event.ToolInputRaw,
 				})
+				e.progress.resume(session, lockGen, time.Now())
 				continue
 			}
 
 			// Flush accumulated text segment before permission prompt
 			previewActive := sp.canPreview()
-			if len(textParts) > segmentStart {
+			if len(textParts) > segmentStart && !e.display.FinalOnly {
 				if !previewActive {
 					segment := strings.Join(textParts[segmentStart:], "")
 					if segment != "" {
@@ -6144,6 +6169,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 
 			<-pending.Resolved
+			e.progress.resume(session, lockGen, time.Now())
 			slog.Info("permission resolved", "request_id", event.RequestID)
 
 			// The stream preview was frozen+detached when this permission
@@ -6208,7 +6234,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			// When tool progress is hidden, segmentStart stays 0 and textParts
 			// contains ALL text across tool boundaries. Prefer the full accumulated
 			// text over event.Content which only contains the last assistant segment.
-			if len(textParts) > 0 && segmentStart == 0 && !e.display.ToolMessages {
+			if len(textParts) > 0 && segmentStart == 0 && !e.display.ToolMessages && !e.display.FinalOnly {
 				fullResponse = strings.Join(textParts, "")
 			} else if fullResponse == "" && len(textParts) > 0 {
 				fullResponse = strings.Join(textParts, "")
@@ -6374,6 +6400,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 			}
 			fullResponse = cleanResponse
+			e.progress.result(session, lockGen, fullResponse, time.Now())
 
 			turnDuration := time.Since(turnStart)
 			slog.Info("turn complete",
@@ -6625,6 +6652,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				state.currentTurnUserMessageTimeMs = queued.userMessageTimeMs
 				state.mu.Unlock()
 				e.usage.beginQueued(queued, session, lockGen, time.Now())
+				e.progress.beginQueued(queued, session, lockGen, time.Now())
 
 				// Stop the previous turn's typing indicator
 				if stopTyping != nil {
@@ -6696,7 +6724,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				queuedRenderer := func(content string) string {
 					return e.renderOutgoingContentForWorkspace(queued.platform, content, workspaceDir)
 				}
-				sp = newStreamPreview(e.streamPreview, queued.platform, queued.replyCtx, e.ctx, queuedRenderer)
+				sp = newStreamPreview(previewCfg, queued.platform, queued.replyCtx, e.ctx, queuedRenderer)
 				cp = newCompactProgressWriter(e.ctx, queued.platform, queued.replyCtx, e.agent.Name(), e.i18n.CurrentLang(), queuedRenderer)
 
 				// Reset streaming card state for the next turn
@@ -6706,7 +6734,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				cardAnswerText.Reset()
 
 				// Try to create a new streaming card for the queued turn
-				if scp, ok := queued.platform.(StreamingCardPlatform); ok {
+				if scp, ok := queued.platform.(StreamingCardPlatform); ok && !e.display.FinalOnly {
 					if sc, err := scp.CreateStreamingCard(e.ctx, queued.replyCtx); err != nil {
 						slog.Warn("streaming card creation failed for queued turn", "error", err)
 					} else {
@@ -6715,7 +6743,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 
 				// Send instant reply for queued turn if no streaming card is active.
-				if e.instantReply.Enabled && streamCard == nil {
+				if e.instantReply.Enabled && streamCard == nil && !e.display.FinalOnly {
 					replyContent := e.instantReply.Content
 					if replyContent == "" {
 						replyContent = e.i18n.T(MsgStarting)
@@ -6822,6 +6850,14 @@ channelClosed:
 	state.mu.Unlock()
 	e.notifyDroppedQueuedMessages(state, fmt.Errorf("agent process exited"))
 	e.cleanupInteractiveState(sessionKey, state)
+
+	if e.display.FinalOnly {
+		state.mu.Lock()
+		p := state.platform
+		state.mu.Unlock()
+		e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "agent process exited"))
+		return
+	}
 
 	if len(textParts) > 0 {
 		state.mu.Lock()
@@ -6977,6 +7013,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		state.currentTurnUserMessageTimeMs = queued.userMessageTimeMs
 		state.mu.Unlock()
 		e.usage.beginQueued(queued, session, lockGen, time.Now())
+		e.progress.beginQueued(queued, session, lockGen, time.Now())
 
 		e.i18n.DetectAndSet(queued.content)
 		prompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)

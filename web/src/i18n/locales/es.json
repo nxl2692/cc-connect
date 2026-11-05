@@ -4,7 +4,7 @@
     "projects": "Proyectos",
     "providers": "Proveedores",
     "sessions": "Sesiones",
-    "chat": "Chat",
+    "chat": "Sesiones",
     "cron": "Tareas programadas",
     "bridge": "Puente",
     "skills": "Habilidades",
@@ -481,5 +481,46 @@
     "updated": "Se actualiza cada 2 segundos · Actualizado {{time}}",
     "showAll": "Mostrar las {{count}} personas",
     "collapse": "Mostrar menos"
+  },
+  "progress": {
+    "view": "Ver progreso",
+    "readOnly": "Progreso de solo lectura",
+    "description": "Consulta tareas iniciadas desde el chat original. Esta página no permite enviar mensajes ni comandos.",
+    "back": "Volver a sesiones",
+    "search": "Buscar personas o sesiones",
+    "allSessions": "Todas las sesiones",
+    "noSessions": "No hay sesiones coincidentes",
+    "toolCount": "Herramientas: {{count}}",
+    "request": "Solicitud actual",
+    "timeline": "Proceso de ejecución",
+    "waitingEvents": "Esperando eventos…",
+    "historical": "Sesión histórica. No se registraron los eventos anteriores a la actualización.",
+    "respondElsewhere": "Responde o autoriza desde el chat original.",
+    "result": "Resultado final",
+    "output": "Salida en curso",
+    "history": "Conversación guardada",
+    "updated": "Se actualiza cada segundo · Actualizado {{time}}",
+    "assistant": "Asistente",
+    "status": {
+      "starting": "Iniciando",
+      "thinking": "Pensando",
+      "working": "Ejecutando",
+      "responding": "Generando salida",
+      "waiting_permission": "Esperando permiso",
+      "waiting_input": "Esperando respuesta",
+      "completed": "Completado",
+      "error": "Fallido",
+      "interrupted": "Interrumpido",
+      "idle": "Guardado"
+    },
+    "event": {
+      "thinking": "Estado de procesamiento",
+      "tool_use": "Inicio de herramienta",
+      "tool_result": "Resultado de herramienta",
+      "permission_request": "Requiere permiso",
+      "user_input_request": "Requiere respuesta",
+      "error": "Error",
+      "hook_rejected": "Salida reemplazada"
+    }
   }
 }
