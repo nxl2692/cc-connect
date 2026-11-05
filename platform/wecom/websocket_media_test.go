@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseContentDispositionFilename(t *testing.T) {
@@ -178,7 +179,10 @@ func TestDeliverWSMediaInbound_QuotedAttachmentsPrecedeCurrentAttachments(t *tes
 	defer srv.Close()
 
 	p, captured := newCapturedWSPlatform()
-	body := &wsMsgCallbackBody{MsgID: "quoted-media", AibotID: "bot"}
+	body := &wsMsgCallbackBody{
+		MsgID: "quoted-media", AibotID: "bot", CreateTime: 1793354400,
+		Quote: &wsQuoteBlock{MsgType: "image"},
+	}
 	p.deliverWSMediaInbound(
 		body,
 		"wecom:chat:user",
@@ -193,8 +197,11 @@ func TestDeliverWSMediaInbound_QuotedAttachmentsPrecedeCurrentAttachments(t *tes
 	if msg.Content != "inspect this" {
 		t.Fatalf("Content = %q", msg.Content)
 	}
-	if got, want := msg.ExtraContent, "[Quoted message]:\n[image]\n\n"; got != want {
-		t.Fatalf("ExtraContent = %q, want %q", got, want)
+	if !strings.HasSuffix(msg.ExtraContent, "[Quoted message]:\n[image]\n\n") || !strings.Contains(msg.ExtraContent, "quoted_message_sent_at: unavailable") {
+		t.Fatalf("quoted context or original-time availability missing: %q", msg.ExtraContent)
+	}
+	if got := contextTimestamp(t, msg.ExtraContent, "current_message_sent_at"); !got.Equal(time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("media callback timestamp changed: %v", got)
 	}
 	if len(msg.Images) != 2 || string(msg.Images[0].Data) != "quoted image" || string(msg.Images[1].Data) != "current image" {
 		t.Fatalf("image order = %#v", msg.Images)

@@ -50,7 +50,10 @@ type wsMixedBlock struct {
 
 type wsQuoteBlock struct {
 	MsgType string `json:"msgtype"`
-	Text    *struct {
+	// Not present in the official QuoteContent schema. Preserve it when a
+	// compatible/private deployment supplies the original message timestamp.
+	CreateTime int64 `json:"create_time,omitempty"`
+	Text       *struct {
 		Content string `json:"content"`
 	} `json:"text,omitempty"`
 	Voice *struct {
@@ -423,9 +426,9 @@ func (p *WSPlatform) deliverWSMediaInbound(body *wsMsgCallbackBody, sessionKey, 
 
 	content := strings.Join(current.content, "\n")
 	content = stripWeComAtMentions(content, p.botID, body.AibotID)
-	quotedContent := formatWSQuotedContent(quoted)
+	quotedContent := formatWSInboundContext(body, quoted)
 
-	if content == "" && quotedContent == "" && len(images) == 0 && len(fileAtts) == 0 {
+	if content == "" && len(quoted.content) == 0 && len(images) == 0 && len(fileAtts) == 0 {
 		slog.Warn("wecom-ws: media inbound empty after downloads", "msg_id", body.MsgID)
 		return
 	}

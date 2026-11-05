@@ -379,7 +379,7 @@ func (p *WSPlatform) handleMsgCallback(frame wsFrame) {
 	}
 
 	if body.CreateTime > 0 {
-		if core.IsOldMessage(time.Unix(body.CreateTime, 0)) {
+		if core.IsOldMessage(wsMessageTime(body.CreateTime)) {
 			slog.Debug("wecom-ws: ignoring old message", "create_time", body.CreateTime)
 			return
 		}
@@ -415,7 +415,7 @@ func (p *WSPlatform) handleMsgCallback(frame wsFrame) {
 	}
 
 	current, quoted := wsCollectInboundParts(&body)
-	quotedContent := formatWSQuotedContent(quoted)
+	quotedContent := formatWSInboundContext(&body, quoted)
 
 	switch body.MsgType {
 	case "voice":

@@ -418,8 +418,8 @@ func TestHandleMsgCallback_SeparatesQuotedTextFromCurrentInstruction(t *testing.
 		if got, want := msg.Content, "修复这个问题"; got != want {
 			t.Fatalf("Content = %q, want %q", got, want)
 		}
-		if got, want := msg.ExtraContent, "[Quoted message]:\n请检查这段旧代码\n\n"; got != want {
-			t.Fatalf("ExtraContent = %q, want %q", got, want)
+		if !strings.HasSuffix(msg.ExtraContent, "[Quoted message]:\n请检查这段旧代码\n\n") {
+			t.Fatalf("quoted text missing from ExtraContent: %q", msg.ExtraContent)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("handler not called")
@@ -454,8 +454,8 @@ func TestHandleMsgCallback_MentionOnlyWithQuoteStillDispatches(t *testing.T) {
 		if msg.Content != "" {
 			t.Fatalf("Content = %q, want empty current instruction", msg.Content)
 		}
-		if got, want := msg.ExtraContent, "[Quoted message]:\n总结这段内容\n\n"; got != want {
-			t.Fatalf("ExtraContent = %q, want %q", got, want)
+		if !strings.HasSuffix(msg.ExtraContent, "[Quoted message]:\n总结这段内容\n\n") {
+			t.Fatalf("quoted text missing from ExtraContent: %q", msg.ExtraContent)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("handler not called")
