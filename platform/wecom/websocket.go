@@ -25,21 +25,19 @@ const (
 // WSPlatform implements core.Platform using the WeChat Work WebSocket long-connection
 // mode (智能机器人长连接). No public URL, no message encryption, no IP allowlist required.
 type WSPlatform struct {
-	botID             string
-	secret            string
-	allowFrom         string
-	groupReplyQuote   bool
-	groupReplyMention bool
-	wsURL             string // WebSocket endpoint; defaults to wsEndpoint (公有云), 可经 ws_url 覆盖为私有化部署地址
-	conn              *websocket.Conn
-	handler           core.MessageHandler
-	ctx               context.Context
-	cancel            context.CancelFunc
-	mu                sync.Mutex // protects conn writes
-	dedup             core.MessageDedup
-	reqSeq            atomic.Int64 // monotonic counter for generating unique req_id
-	missedPong        atomic.Int32 // consecutive heartbeat acks not received
-	pendingAcks       sync.Map     // req_id -> chan wsAckResult, for sequential send with ack waiting
+	botID       string
+	secret      string
+	allowFrom   string
+	wsURL       string // WebSocket endpoint; defaults to wsEndpoint (公有云), 可经 ws_url 覆盖为私有化部署地址
+	conn        *websocket.Conn
+	handler     core.MessageHandler
+	ctx         context.Context
+	cancel      context.CancelFunc
+	mu          sync.Mutex // protects conn writes
+	dedup       core.MessageDedup
+	reqSeq      atomic.Int64 // monotonic counter for generating unique req_id
+	missedPong  atomic.Int32 // consecutive heartbeat acks not received
+	pendingAcks sync.Map     // req_id -> chan wsAckResult, for sequential send with ack waiting
 }
 
 const (
@@ -55,7 +53,6 @@ type wsReplyContext struct {
 	chatID   string      // chatid for aibot_send_msg
 	chatType string      // chattype: "single" or "group"
 	userID   string      // from.userid
-	question string      // bounded, escaped preview of this callback's message
 	sendMu   *sync.Mutex // serializes sends sharing the callback req_id / ACK key
 }
 
@@ -134,24 +131,12 @@ func newWebSocket(opts map[string]any) (core.Platform, error) {
 	if wsURL == "" {
 		wsURL = wsEndpoint
 	}
-	// Replies retain the callback req_id for the native client quote. Avoid
-	// copying the question and its nested quote chain into the answer by default.
-	groupReplyQuote, err := wsBoolOption(opts, "group_reply_quote", false)
-	if err != nil {
-		return nil, err
-	}
-	groupReplyMention, err := wsBoolOption(opts, "group_reply_mention", false)
-	if err != nil {
-		return nil, err
-	}
 
 	return &WSPlatform{
-		botID:             botID,
-		secret:            secret,
-		allowFrom:         allowFrom,
-		wsURL:             wsURL,
-		groupReplyQuote:   groupReplyQuote,
-		groupReplyMention: groupReplyMention,
+		botID:     botID,
+		secret:    secret,
+		allowFrom: allowFrom,
+		wsURL:     wsURL,
 	}, nil
 }
 
@@ -434,7 +419,6 @@ func (p *WSPlatform) handleMsgCallback(frame wsFrame) {
 	}
 
 	current, quoted := wsCollectInboundParts(&body)
-	rctx.question = wsQuestionPreview(&body, current, quoted, p.botID)
 	quotedContent := formatWSInboundContext(&body, quoted)
 
 	switch body.MsgType {
@@ -499,8 +483,7 @@ func (p *WSPlatform) Reply(ctx context.Context, rctx any, content string) error 
 	if content == "" {
 		return nil
 	}
-	prefix := p.wsGroupReplyPrefix(rc, true)
-	if len(prefix)+len(content) > 20480 {
+	if len(content) > 20480 {
 		return p.Send(ctx, rctx, content)
 	}
 
@@ -513,7 +496,7 @@ func (p *WSPlatform) Reply(ctx context.Context, rctx any, content string) error 
 			"stream": map[string]any{
 				"id":      streamID,
 				"finish":  true,
-				"content": prefix + content,
+				"content": content,
 			},
 		},
 	}
@@ -555,8 +538,7 @@ func (p *WSPlatform) Send(ctx context.Context, rctx any, content string) error {
 		rc.sendMu.Lock()
 		defer rc.sendMu.Unlock()
 	}
-	prefix := p.wsGroupReplyPrefix(rc, true)
-	chunks := splitByBytes(content, 2000-len(prefix))
+	chunks := splitByBytes(content, 2000)
 	for i, chunk := range chunks {
 		reqID := p.generateReqID("aibot_send_msg")
 		cmd := "aibot_send_msg"
@@ -564,12 +546,9 @@ func (p *WSPlatform) Send(ctx context.Context, rctx any, content string) error {
 			reqID = rc.reqID
 			cmd = "aibot_respond_msg"
 		}
-		// Quote every chunk so long answers remain identifiable, but only @
-		// once per Send call to avoid a notification for each split chunk.
-		prefix = p.wsGroupReplyPrefix(rc, i == 0)
 		body := map[string]any{
 			"msgtype":  "markdown",
-			"markdown": map[string]string{"content": prefix + chunk},
+			"markdown": map[string]string{"content": chunk},
 		}
 		if !boundReply {
 			body["chatid"] = rc.chatID

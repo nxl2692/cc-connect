@@ -3,7 +3,6 @@ package wecom
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -112,69 +111,39 @@ func groupReplyTestFrame(t *testing.T, frames <-chan wsFrame) (wsFrame, string) 
 }
 
 func TestWSGroupReply_FollowupsKeepEachQuestionAndSender(t *testing.T) {
-	p, frames, messages := groupReplyTestPlatform(t, map[string]any{"group_reply_quote": true})
+	p, frames, messages := groupReplyTestPlatform(t, nil)
 	a := groupReplyTestMessage(t, p, messages, "a", "alice", "@bot 问题甲", "group")
 	b := groupReplyTestMessage(t, p, messages, "b", "bob", "@bot 问题乙", "group")
 	a2 := groupReplyTestMessage(t, p, messages, "a2", "alice", "@bot 下个问题", "group")
 	// Answer out of order, after later messages have already arrived.
 	for _, item := range []struct {
-		msg            *core.Message
-		user, question string
+		msg    *core.Message
+		answer string
 	}{
-		{b, "bob", "问题乙"}, {a, "alice", "问题甲"}, {a2, "alice", "下个问题"},
+		{b, "回答问题乙"}, {a, "回答问题甲"}, {a2, "回答下个问题"},
 	} {
-		if err := p.Send(context.Background(), item.msg.ReplyCtx, "回答"); err != nil {
+		if err := p.Send(context.Background(), item.msg.ReplyCtx, item.answer); err != nil {
 			t.Fatal(err)
 		}
 		frame, text := groupReplyTestFrame(t, frames)
 		if frame.Cmd != "aibot_respond_msg" || frame.Headers.ReqID != "req-"+item.msg.MessageID {
 			t.Errorf("follow-up lost originating callback: %+v", frame)
 		}
-		want := "> " + item.question + "\n\n回答"
-		if text != want {
-			t.Errorf("group answer = %q, want %q", text, want)
+		if text != item.answer {
+			t.Errorf("group answer = %q, want %q", text, item.answer)
 		}
 	}
 }
 
 func TestWSGroupReply_ReplyAlsoAttributesQuestion(t *testing.T) {
-	p, frames, messages := groupReplyTestPlatform(t, map[string]any{"group_reply_quote": true})
+	p, frames, messages := groupReplyTestPlatform(t, nil)
 	msg := groupReplyTestMessage(t, p, messages, "reply", "alice", "@bot 原问题", "group")
 	if err := p.Reply(context.Background(), msg.ReplyCtx, "处理结果"); err != nil {
 		t.Fatal(err)
 	}
 	frame, text := groupReplyTestFrame(t, frames)
-	if frame.Headers.ReqID != "req-reply" || text != "> 原问题\n\n处理结果" {
+	if frame.Cmd != "aibot_respond_msg" || frame.Headers.ReqID != "req-reply" || text != "处理结果" {
 		t.Fatalf("reply attribution = %q, frame=%+v", text, frame)
-	}
-}
-
-func TestWSGroupReply_LongAnswerReservesPrefixBytesAndMentionsOnce(t *testing.T) {
-	p, frames, messages := groupReplyTestPlatform(t, map[string]any{"group_reply_mention": true, "group_reply_quote": true})
-	msg := groupReplyTestMessage(t, p, messages, "long", "alice", "@bot "+strings.Repeat("问题", 300), "group")
-	answer := strings.Repeat("中文😀", 1300)
-	if err := p.Send(context.Background(), msg.ReplyCtx, answer); err != nil {
-		t.Fatal(err)
-	}
-	var joined strings.Builder
-	mentions, chunks := 0, len(frames)
-	for range chunks {
-		frame, text := groupReplyTestFrame(t, frames)
-		if len(text) > 2000 || !utf8.ValidString(text) || frame.Headers.ReqID != "req-long" {
-			t.Fatalf("invalid chunk: bytes=%d, frame=%+v", len(text), frame)
-		}
-		mentions += strings.Count(text, "<@alice>")
-		_, body, found := strings.Cut(text, "\n\n")
-		if strings.HasPrefix(text, "<@") {
-			_, body, found = strings.Cut(body, "\n\n")
-		}
-		if !found || !strings.Contains(text, "…") {
-			t.Fatalf("missing bounded question preview: %q", text)
-		}
-		joined.WriteString(body)
-	}
-	if joined.String() != answer || mentions != 1 || chunks < 2 {
-		t.Fatalf("answer corrupted: chunks=%d mentions=%d bytes=%d", chunks, mentions, joined.Len())
 	}
 }
 
@@ -193,29 +162,6 @@ func TestWSGroupReply_PrivateAndProactiveMessagesKeepPlainContent(t *testing.T) 
 		if frame.Cmd != "aibot_send_msg" || text != "plain" {
 			t.Fatalf("non-group-callback message changed: %s %q", frame.Cmd, text)
 		}
-	}
-}
-
-func TestWSGroupReply_QuoteAndMentionCanBeDisabledIndependently(t *testing.T) {
-	for _, tc := range []struct {
-		quote, mention bool
-		want           string
-	}{
-		{true, false, "> question\n\nanswer"},
-		{false, true, "<@alice>\n\nanswer"},
-		{false, false, "answer"},
-	} {
-		t.Run(fmt.Sprintf("%t-%t", tc.quote, tc.mention), func(t *testing.T) {
-			p, frames, messages := groupReplyTestPlatform(t, map[string]any{"group_reply_quote": tc.quote, "group_reply_mention": tc.mention})
-			msg := groupReplyTestMessage(t, p, messages, "options", "alice", "question", "group")
-			if err := p.Send(context.Background(), msg.ReplyCtx, "answer"); err != nil {
-				t.Fatal(err)
-			}
-			_, text := groupReplyTestFrame(t, frames)
-			if text != tc.want {
-				t.Fatalf("content = %q, want %q", text, tc.want)
-			}
-		})
 	}
 }
 
@@ -260,7 +206,7 @@ func TestWSGroupReply_ServerRejectionIsReturned(t *testing.T) {
 }
 
 func TestWSGroupReply_OversizedReplyKeepsCompleteAnswer(t *testing.T) {
-	p, frames, messages := groupReplyTestPlatform(t, map[string]any{"group_reply_quote": true})
+	p, frames, messages := groupReplyTestPlatform(t, nil)
 	msg := groupReplyTestMessage(t, p, messages, "oversized", "alice", "question", "group")
 	answer := strings.Repeat("😀中文", 2100)
 	if err := p.Reply(context.Background(), msg.ReplyCtx, answer); err != nil {
@@ -269,16 +215,10 @@ func TestWSGroupReply_OversizedReplyKeepsCompleteAnswer(t *testing.T) {
 	var joined strings.Builder
 	for n := len(frames); n > 0; n-- {
 		frame, text := groupReplyTestFrame(t, frames)
-		if frame.Cmd != "aibot_respond_msg" || len(text) > 2000 || !utf8.ValidString(text) {
+		if frame.Cmd != "aibot_respond_msg" || frame.Headers.ReqID != "req-oversized" || len(text) > 2000 || !utf8.ValidString(text) {
 			t.Fatalf("invalid overflow frame: %+v", frame)
 		}
-		if strings.HasPrefix(text, "<@alice>\n\n") {
-			text = strings.TrimPrefix(text, "<@alice>\n\n")
-		}
-		if !strings.HasPrefix(text, "> question\n\n") {
-			t.Fatalf("missing question: %q", text)
-		}
-		joined.WriteString(strings.TrimPrefix(text, "> question\n\n"))
+		joined.WriteString(text)
 	}
 	if joined.String() != answer {
 		t.Fatal("oversized reply truncated or corrupted")

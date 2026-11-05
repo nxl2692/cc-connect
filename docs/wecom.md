@@ -82,33 +82,16 @@ allow_from = "*"
 | `bot_secret` | ✅ | 智能机器人 Secret |
 | `ws_url` | ❌ | WebSocket 端点地址（默认 `wss://openws.work.weixin.qq.com`；**私有化部署**时改为你的私有地址，如 `wss://your-wecom-host:port/im_openws?bizid=<id>`） |
 | `allow_from` | ❌ | 允许的用户 ID（默认 `"*"` 允许所有） |
-| `group_reply_quote` | ❌ | 默认 `false`：正文只发送回答，保留原请求关联供客户端展示原生引用。设为 `true` 可额外添加最长 512 字节的原问题 Markdown 摘要；单聊与定时推送不添加 |
-| `group_reply_mention` | ❌ | 默认 `false`：实验性 `<@userid>` 标记，仅供已验证支持的部署显式开启；官方智能机器人 Markdown 可能直接显示原始 ID，不保证触发 @ 提醒。开启时长回答仅首段添加 |
 
 ### 群聊回答关联原问题
 
-群聊中，回答及后续消息使用收到消息时的 `headers.req_id`，通过 `aibot_respond_msg` 回复原请求，不再仅凭 `chatid` 用 `aibot_send_msg` 发到群里。每条问题分别保存提问人、原请求及问题摘要，多人同时提问、同一个人连续提问时不会覆盖彼此的引用。
+群聊中，回答及后续消息使用收到消息时的 `headers.req_id`，通过 `aibot_respond_msg` 回复原请求。每条提问各自保留回调上下文，多人交错提问、同一个人连续提问时，回答仍对应各自的原消息。
 
-回答默认仅包含结果正文。原消息关联由原 `req_id` 保留，目标企微客户端会展示原生引用框；正文不再重复复制原问题和多层历史引用，也不插入未被企微识别的 `<@userid>` 标记：
+回答正文直接发送结果，不自动拼接原问题摘要或 @ 标记。原生引用框由企微客户端根据回复关联展示；agent 接收的引用上下文和回答正文自身的 Markdown 引用均保留。
 
-```text
-这里是分析结果……
-```
+同一回调的多次发送串行等待 ACK，避免复用 `req_id` 时覆盖待确认记录。长回答按 UTF-8 字节安全拆分，每一段均关联原请求；超出单条流式回复上限的回答也按此方式发送完整内容。
 
-关闭正文摘要不会影响 agent 接收用户引用的内容，回答正文自身有意使用的 Markdown 引用也会保留。如果其他客户端不展示原生引用，可显式开启 `group_reply_quote = true` 作为备用。备用摘要覆盖文本、语音转写、图文附件标记及用户引用的内容，按 UTF-8 字节限制截断并转义 Markdown 和 `<@...>`；长回答每段添加摘要并预留字节额度。
-
-**平台边界**：[企微长连接文档](https://developer.work.weixin.qq.com/document/path/101463)要求回复透传原 `req_id`，但没有提供可指定任意原消息 ID 的出站 `quote` 字段，也没有明确保证智能机器人支持 `<@userid>` 的成员提醒。这里始终保留原请求关联，正文引用摘要则为可选功能；原生引用框的展示取决于客户端，不能据此保证其他客户端的相同行为或 @ 通知。Webhook 模式的[主动回复消息文档](https://developer.work.weixin.qq.com/document/path/101138)描述的自动引用行为，不能直接当作长连接模式的保证。使用现有机器人升级后，需要在目标企微客户端验证这两项展示效果。
-
-**关于 @ 提醒**：官方仓库 [WecomTeam/wecom-cli#103](https://github.com/WecomTeam/wecom-cli/issues/103) 的维护者于 2026-10-20 确认 Markdown 中 @ 群成员尚未完整支持；用户在该接口发送 `<@userid>` 会看到普通文本。默认关闭该实验性标记，避免把不可读的用户 ID 当作真正的 @。修改标记里的 ID 或显示名称也不能代替平台的提醒能力。
-
-可在 `[projects.platforms.options]` 配置摘要和实验性标记：
-
-```toml
-group_reply_quote = false
-group_reply_mention = false
-```
-
-定时任务、跨会话转发等只有会话地址而没有原请求的消息，仍用 `aibot_send_msg`，不会借用历史问题进行引用或 @。
+单聊、定时任务、跨会话转发等使用主动发送路径；没有原请求的消息通过 `aibot_send_msg` 发出。协议说明见[企微长连接文档](https://developer.work.weixin.qq.com/document/path/101463)。原生引用展示效果以目标企微客户端为准。
 
 ### 第三步：启动并验证
 
