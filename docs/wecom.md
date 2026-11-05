@@ -83,16 +83,6 @@ allow_from = "*"
 | `ws_url` | ❌ | WebSocket 端点地址（默认 `wss://openws.work.weixin.qq.com`；**私有化部署**时改为你的私有地址，如 `wss://your-wecom-host:port/im_openws?bizid=<id>`） |
 | `allow_from` | ❌ | 允许的用户 ID（默认 `"*"` 允许所有） |
 
-### 群聊回答关联原问题
-
-群聊中，回答及后续消息使用收到消息时的 `headers.req_id`，通过 `aibot_respond_msg` 回复原请求。每条提问各自保留回调上下文，多人交错提问、同一个人连续提问时，回答仍对应各自的原消息。
-
-原生引用框由企微客户端根据回复关联展示。
-
-同一回调的多次发送串行等待 ACK，避免复用 `req_id` 时覆盖待确认记录。长回答按 UTF-8 字节安全拆分，每一段均关联原请求；超出单条流式回复上限的回答也按此方式发送完整内容。
-
-单聊、定时任务、跨会话转发等使用主动发送路径；没有原请求的消息通过 `aibot_send_msg` 发出。协议说明见[企微长连接文档](https://developer.work.weixin.qq.com/document/path/101463)。原生引用展示效果以目标企微客户端为准。
-
 ### 第三步：启动并验证
 
 ```bash
