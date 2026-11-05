@@ -49,10 +49,16 @@ var errWSAckTimeout = errors.New("wecom-ws: ack timeout")
 
 // wsReplyContext holds the context needed to reply to a specific message.
 type wsReplyContext struct {
-	reqID    string // req_id from headers of aibot_msg_callback
-	chatID   string // chatid for aibot_send_msg
-	chatType string // chattype: "single" or "group"
-	userID   string // from.userid
+	reqID    string        // req_id from headers of aibot_msg_callback
+	chatID   string        // chatid for aibot_send_msg
+	chatType string        // chattype: "single" or "group"
+	userID   string        // from.userid
+	state    *wsReplyState // shared by copies of this callback's reply context
+}
+
+type wsReplyState struct {
+	mu       sync.Mutex
+	unusable bool // a failed ACK wait makes later ACKs for this req_id ambiguous
 }
 
 // --- WebSocket protocol frame types (matching official SDK) ---
@@ -403,6 +409,9 @@ func (p *WSPlatform) handleMsgCallback(frame wsFrame) {
 		}
 		return
 	}
+	// Authorized replies run in the handler goroutine. Unauthorized replies
+	// above run on the reader goroutine and must not wait for an ACK there.
+	rctx.state = &wsReplyState{}
 
 	sessionKey := fmt.Sprintf("wecom:%s:%s", chatID, body.From.UserID)
 
@@ -479,6 +488,9 @@ func (p *WSPlatform) Reply(ctx context.Context, rctx any, content string) error 
 	if content == "" {
 		return nil
 	}
+	if len(content) > 20480 {
+		return p.Send(ctx, rctx, content)
+	}
 
 	streamID := p.generateReqID("stream")
 	frame := map[string]any{
@@ -493,7 +505,19 @@ func (p *WSPlatform) Reply(ctx context.Context, rctx any, content string) error 
 			},
 		},
 	}
-	if err := p.writeJSON(frame); err != nil {
+	var err error
+	if rc.chatType == "group" && rc.state != nil {
+		rc.state.mu.Lock()
+		if rc.state.unusable {
+			rc.state.mu.Unlock()
+			return p.Send(ctx, rctx, content)
+		}
+		err = p.writeAndWaitCallbackAck(ctx, frame, rc)
+		rc.state.mu.Unlock()
+	} else {
+		err = p.writeJSON(frame)
+	}
+	if err != nil {
 		slog.Error("wecom-ws: reply failed", "user", rc.userID, "error", err)
 		return err
 	}
@@ -501,9 +525,9 @@ func (p *WSPlatform) Reply(ctx context.Context, rctx any, content string) error 
 	return nil
 }
 
-// Send sends a proactive message via aibot_send_msg (markdown format).
-// Used for follow-up messages and cron-triggered messages where no req_id is available.
-// Markdown is natively supported.
+// Send keeps group follow-ups associated with their triggering callback via
+// aibot_respond_msg. Proactive messages without a callback and private messages
+// continue to use aibot_send_msg. Both paths use markdown format.
 func (p *WSPlatform) Send(ctx context.Context, rctx any, content string) error {
 	rc, ok := rctx.(wsReplyContext)
 	if !ok {
@@ -516,21 +540,45 @@ func (p *WSPlatform) Send(ctx context.Context, rctx any, content string) error {
 		return fmt.Errorf("wecom-ws: chatID is empty, cannot send proactive message")
 	}
 
+	// A callback req_id is also the ACK correlation key. Two concurrent sends
+	// for the same callback must not replace each other's pending ACK channel.
+	callbackReply := rc.chatType == "group" && rc.reqID != ""
+	boundReply := callbackReply
+	if callbackReply && rc.state != nil {
+		rc.state.mu.Lock()
+		defer rc.state.mu.Unlock()
+		boundReply = !rc.state.unusable
+	}
 	chunks := splitByBytes(content, 2000)
 	for i, chunk := range chunks {
 		reqID := p.generateReqID("aibot_send_msg")
-		frame := map[string]any{
-			"cmd":     "aibot_send_msg",
-			"headers": map[string]string{"req_id": reqID},
-			"body": map[string]any{
-				"chatid":  rc.chatID,
-				"msgtype": "markdown",
-				"markdown": map[string]string{
-					"content": chunk,
-				},
-			},
+		cmd := "aibot_send_msg"
+		if boundReply {
+			reqID = rc.reqID
+			cmd = "aibot_respond_msg"
 		}
-		if err := p.writeAndWaitAck(ctx, frame, reqID); err != nil {
+		body := map[string]any{
+			"msgtype":  "markdown",
+			"markdown": map[string]string{"content": chunk},
+		}
+		if !boundReply {
+			body["chatid"] = rc.chatID
+		}
+		frame := map[string]any{
+			"cmd":     cmd,
+			"headers": map[string]string{"req_id": reqID},
+			"body":    body,
+		}
+		var err error
+		if boundReply {
+			err = p.writeAndWaitCallbackAck(ctx, frame, rc)
+		} else if callbackReply {
+			// A fallback has its own ACK key; never treat its timeout as success.
+			err = p.writeAndWaitAckStrict(ctx, frame, reqID, wsAckTimeout)
+		} else {
+			err = p.writeAndWaitAck(ctx, frame, reqID)
+		}
+		if err != nil {
 			slog.Error("wecom-ws: send failed", "user", rc.userID, "chunk", i, "error", err)
 			return err
 		}
@@ -590,6 +638,19 @@ func (p *WSPlatform) writeAndWaitAckWithTimeout(ctx context.Context, frame map[s
 	}
 	if err != nil {
 		return err
+	}
+	return result.err
+}
+
+// The caller holds rc.state.mu. Keep an uncertain callback ACK key retired:
+// a late ACK must never complete a later send registered with the same req_id.
+func (p *WSPlatform) writeAndWaitCallbackAck(ctx context.Context, frame map[string]any, rc wsReplyContext) error {
+	result, err := p.writeAndWaitResult(ctx, frame, rc.reqID, wsAckTimeout)
+	if err != nil {
+		if rc.state != nil {
+			rc.state.unusable = true
+		}
+		return fmt.Errorf("wecom-ws: callback reply %s: %w", rc.reqID, err)
 	}
 	return result.err
 }
