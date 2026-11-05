@@ -74,8 +74,9 @@ func (p *WSPlatform) wsGroupReplyPrefix(rc wsReplyContext, mention bool) string 
 	}
 	var prefix strings.Builder
 	if p.groupReplyMention && mention && wsMentionableUser(rc.userID) {
-		// WeCom's member-mention extension; actual rendering/notification support
-		// depends on the smart-bot endpoint/client and needs live verification.
+		// Explicit opt-in for deployments that have verified this extension.
+		// The official smart-bot Markdown path can render it as literal text,
+		// so the factory disables it by default. See WecomTeam/wecom-cli#103.
 		prefix.WriteString("<@" + rc.userID + ">\n\n")
 	}
 	if p.groupReplyQuote && rc.question != "" {

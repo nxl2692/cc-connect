@@ -138,7 +138,7 @@ func newWebSocket(opts map[string]any) (core.Platform, error) {
 	if err != nil {
 		return nil, err
 	}
-	groupReplyMention, err := wsBoolOption(opts, "group_reply_mention", true)
+	groupReplyMention, err := wsBoolOption(opts, "group_reply_mention", false)
 	if err != nil {
 		return nil, err
 	}

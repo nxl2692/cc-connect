@@ -130,7 +130,7 @@ func TestWSGroupReply_FollowupsKeepEachQuestionAndSender(t *testing.T) {
 		if frame.Cmd != "aibot_respond_msg" || frame.Headers.ReqID != "req-"+item.msg.MessageID {
 			t.Errorf("follow-up lost originating callback: %+v", frame)
 		}
-		want := "<@" + item.user + ">\n\n> " + item.question + "\n\n回答"
+		want := "> " + item.question + "\n\n回答"
 		if text != want {
 			t.Errorf("group answer = %q, want %q", text, want)
 		}
@@ -144,13 +144,13 @@ func TestWSGroupReply_ReplyAlsoAttributesQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	frame, text := groupReplyTestFrame(t, frames)
-	if frame.Headers.ReqID != "req-reply" || text != "<@alice>\n\n> 原问题\n\n处理结果" {
+	if frame.Headers.ReqID != "req-reply" || text != "> 原问题\n\n处理结果" {
 		t.Fatalf("reply attribution = %q, frame=%+v", text, frame)
 	}
 }
 
 func TestWSGroupReply_LongAnswerReservesPrefixBytesAndMentionsOnce(t *testing.T) {
-	p, frames, messages := groupReplyTestPlatform(t, nil)
+	p, frames, messages := groupReplyTestPlatform(t, map[string]any{"group_reply_mention": true})
 	msg := groupReplyTestMessage(t, p, messages, "long", "alice", "@bot "+strings.Repeat("问题", 300), "group")
 	answer := strings.Repeat("中文😀", 1300)
 	if err := p.Send(context.Background(), msg.ReplyCtx, answer); err != nil {
@@ -282,5 +282,25 @@ func TestWSGroupReply_OversizedReplyKeepsCompleteAnswer(t *testing.T) {
 	}
 	if joined.String() != answer {
 		t.Fatal("oversized reply truncated or corrupted")
+	}
+}
+
+// Regression: smart-bot Markdown replies render <@opaque-userid> literally.
+// Default replies must preserve the question/request without leaking that marker.
+func TestWSGroupReply_DefaultDoesNotExposeOpaqueUserIDAsMention(t *testing.T) {
+	p, frames, messages := groupReplyTestPlatform(t, nil)
+	const opaqueID = "wo_opaque_sender_123"
+	msg := groupReplyTestMessage(t, p, messages, "opaque", opaqueID, "@bot 原问题", "group")
+	for _, send := range []func(context.Context, any, string) error{p.Reply, p.Send} {
+		if err := send(context.Background(), msg.ReplyCtx, "最终结果"); err != nil {
+			t.Fatal(err)
+		}
+		frame, text := groupReplyTestFrame(t, frames)
+		if frame.Cmd != "aibot_respond_msg" || frame.Headers.ReqID != "req-opaque" || text != "> 原问题\n\n最终结果" {
+			t.Fatalf("default reply has invalid mention or lost attribution: frame=%+v text=%q", frame, text)
+		}
+		if strings.Contains(text, opaqueID) || strings.Contains(text, "<@") {
+			t.Fatalf("default reply exposed opaque mention: %q", text)
+		}
 	}
 }

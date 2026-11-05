@@ -1522,7 +1522,7 @@ app_secret = "your-feishu-app-secret"
 # ws_url = "wss://your-wecom-host:port/im_openws?bizid=10001"  # optional / 可选：私有化部署 WebSocket 地址，留空默认公有云 wss://openws.work.weixin.qq.com
 # allow_from = "*"  # Allowed user IDs / 允许的用户 ID
 # group_reply_quote = true  # Add an escaped original-question preview to group answers / 群聊回答附带原问题摘要
-# group_reply_mention = true  # Emit <@userid> for the sender; client support needs verification / 尝试 @ 提问人，提醒效果需客户端验证
+# group_reply_mention = false  # Experimental <@userid> markup; official smart-bot Markdown may show it literally / 默认关闭；官方智能机器人可能直接显示原始 ID，不能保证 @ 提醒
 
 # Weixin personal (ilink bot) / 微信个人号（ilink 机器人网关）
 # Same HTTP API as OpenClaw @tencent-weixin/openclaw-weixin: long-poll getUpdates + sendMessage.
