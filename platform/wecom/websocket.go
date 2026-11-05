@@ -49,11 +49,16 @@ var errWSAckTimeout = errors.New("wecom-ws: ack timeout")
 
 // wsReplyContext holds the context needed to reply to a specific message.
 type wsReplyContext struct {
-	reqID    string      // req_id from headers of aibot_msg_callback
-	chatID   string      // chatid for aibot_send_msg
-	chatType string      // chattype: "single" or "group"
-	userID   string      // from.userid
-	sendMu   *sync.Mutex // serializes sends sharing the callback req_id / ACK key
+	reqID    string        // req_id from headers of aibot_msg_callback
+	chatID   string        // chatid for aibot_send_msg
+	chatType string        // chattype: "single" or "group"
+	userID   string        // from.userid
+	state    *wsReplyState // shared by copies of this callback's reply context
+}
+
+type wsReplyState struct {
+	mu       sync.Mutex
+	unusable bool // a failed ACK wait makes later ACKs for this req_id ambiguous
 }
 
 // --- WebSocket protocol frame types (matching official SDK) ---
@@ -406,7 +411,7 @@ func (p *WSPlatform) handleMsgCallback(frame wsFrame) {
 	}
 	// Authorized replies run in the handler goroutine. Unauthorized replies
 	// above run on the reader goroutine and must not wait for an ACK there.
-	rctx.sendMu = &sync.Mutex{}
+	rctx.state = &wsReplyState{}
 
 	sessionKey := fmt.Sprintf("wecom:%s:%s", chatID, body.From.UserID)
 
@@ -501,10 +506,14 @@ func (p *WSPlatform) Reply(ctx context.Context, rctx any, content string) error 
 		},
 	}
 	var err error
-	if rc.chatType == "group" && rc.sendMu != nil {
-		rc.sendMu.Lock()
-		err = p.writeAndWaitAckStrict(ctx, frame, rc.reqID, wsAckTimeout)
-		rc.sendMu.Unlock()
+	if rc.chatType == "group" && rc.state != nil {
+		rc.state.mu.Lock()
+		if rc.state.unusable {
+			rc.state.mu.Unlock()
+			return p.Send(ctx, rctx, content)
+		}
+		err = p.writeAndWaitCallbackAck(ctx, frame, rc)
+		rc.state.mu.Unlock()
 	} else {
 		err = p.writeJSON(frame)
 	}
@@ -533,10 +542,12 @@ func (p *WSPlatform) Send(ctx context.Context, rctx any, content string) error {
 
 	// A callback req_id is also the ACK correlation key. Two concurrent sends
 	// for the same callback must not replace each other's pending ACK channel.
-	boundReply := rc.chatType == "group" && rc.reqID != ""
-	if boundReply && rc.sendMu != nil {
-		rc.sendMu.Lock()
-		defer rc.sendMu.Unlock()
+	callbackReply := rc.chatType == "group" && rc.reqID != ""
+	boundReply := callbackReply
+	if callbackReply && rc.state != nil {
+		rc.state.mu.Lock()
+		defer rc.state.mu.Unlock()
+		boundReply = !rc.state.unusable
 	}
 	chunks := splitByBytes(content, 2000)
 	for i, chunk := range chunks {
@@ -560,6 +571,9 @@ func (p *WSPlatform) Send(ctx context.Context, rctx any, content string) error {
 		}
 		var err error
 		if boundReply {
+			err = p.writeAndWaitCallbackAck(ctx, frame, rc)
+		} else if callbackReply {
+			// A fallback has its own ACK key; never treat its timeout as success.
 			err = p.writeAndWaitAckStrict(ctx, frame, reqID, wsAckTimeout)
 		} else {
 			err = p.writeAndWaitAck(ctx, frame, reqID)
@@ -624,6 +638,19 @@ func (p *WSPlatform) writeAndWaitAckWithTimeout(ctx context.Context, frame map[s
 	}
 	if err != nil {
 		return err
+	}
+	return result.err
+}
+
+// The caller holds rc.state.mu. Keep an uncertain callback ACK key retired:
+// a late ACK must never complete a later send registered with the same req_id.
+func (p *WSPlatform) writeAndWaitCallbackAck(ctx context.Context, frame map[string]any, rc wsReplyContext) error {
+	result, err := p.writeAndWaitResult(ctx, frame, rc.reqID, wsAckTimeout)
+	if err != nil {
+		if rc.state != nil {
+			rc.state.unusable = true
+		}
+		return fmt.Errorf("wecom-ws: callback reply %s: %w", rc.reqID, err)
 	}
 	return result.err
 }
