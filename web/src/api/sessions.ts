@@ -47,6 +47,11 @@ export interface ProgressSession {
   tool_count: number; finished: boolean; request?: string; preview?: string; result?: string;
   events?: ProgressEvent[]; history?: { role: string; content: string; timestamp: string }[];
 }
-export interface ProgressSnapshot { sampled_at: string; read_only: boolean; sessions: ProgressSession[]; selected: ProgressSession | null }
+export interface ProgressQueuedRequest {
+  key: string; queue_key: string; session_key: string; platform: string;
+  user_id: string; user_name: string; chat_name: string; request: string;
+  position: number; queued_at?: string; image_count: number; file_count: number;
+}
+export interface ProgressSnapshot { sampled_at: string; read_only: boolean; sessions: ProgressSession[]; selected: ProgressSession | null; queue: ProgressQueuedRequest[] }
 export const getProjectProgress = (project: string, params: Record<string,string>, signal?: AbortSignal) =>
   api.get<ProgressSnapshot>(`/projects/${encodeURIComponent(project)}/progress`, params, signal);

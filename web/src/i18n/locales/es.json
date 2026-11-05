@@ -521,6 +521,17 @@
       "user_input_request": "Requiere respuesta",
       "error": "Error",
       "hook_rejected": "Salida reemplazada"
+    },
+    "queue": {
+      "title": "Solicitudes en cola",
+      "count": "{{count}} en espera",
+      "description": "Cada conversación tiene su propia cola. La posición 1 se ejecuta al terminar la solicitud actual.",
+      "empty": "No hay solicitudes en espera.",
+      "group": "Cola de conversación {{number}}",
+      "position": "Posición {{position}}",
+      "waiting": "Espera: {{minutes}} min {{seconds}} s",
+      "queuedAt": "En cola desde {{time}}",
+      "attachments": "{{images}} imágenes · {{files}} archivos"
     }
   }
 }

@@ -521,6 +521,17 @@
       "user_input_request": "回答が必要",
       "error": "エラー",
       "hook_rejected": "出力を再生成"
+    },
+    "queue": {
+      "title": "待機中のリクエスト",
+      "count": "{{count}} 件待機中",
+      "description": "会話ごとに独立したキューがあります。先頭のリクエストは現在の処理が終わると実行されます。",
+      "empty": "待機中のリクエストはありません。",
+      "group": "会話キュー {{number}}",
+      "position": "{{position}} 番目",
+      "waiting": "待機 {{minutes}} 分 {{seconds}} 秒",
+      "queuedAt": "受付時刻：{{time}}",
+      "attachments": "画像 {{images}} 件 · ファイル {{files}} 件"
     }
   }
 }

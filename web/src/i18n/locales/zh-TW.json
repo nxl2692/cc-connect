@@ -521,6 +521,17 @@
       "user_input_request": "需要回答",
       "error": "執行錯誤",
       "hook_rejected": "重新產生輸出"
+    },
+    "queue": {
+      "title": "排隊中的請求",
+      "count": "{{count}} 筆等待中",
+      "description": "各對話獨立排隊。第 1 位將於目前請求完成後執行，等待時間為已等待的時間。",
+      "empty": "目前沒有排隊請求。",
+      "group": "對話佇列 {{number}}",
+      "position": "第 {{position}} 位",
+      "waiting": "已等待 {{minutes}} 分 {{seconds}} 秒",
+      "queuedAt": "加入佇列時間：{{time}}",
+      "attachments": "{{images}} 張圖片 · {{files}} 個檔案"
     }
   }
 }

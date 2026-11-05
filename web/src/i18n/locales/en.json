@@ -521,6 +521,17 @@
       "user_input_request": "Reply needed",
       "error": "Error",
       "hook_rejected": "Draft replaced"
+    },
+    "queue": {
+      "title": "Queued requests",
+      "count": "{{count}} waiting",
+      "description": "Each conversation has its own queue. Position 1 runs after the current request finishes.",
+      "empty": "No requests are waiting.",
+      "group": "Conversation queue {{number}}",
+      "position": "#{{position}}",
+      "waiting": "Waiting {{minutes}}m {{seconds}}s",
+      "queuedAt": "Queued at {{time}}",
+      "attachments": "{{images}} images · {{files}} files"
     }
   }
 }

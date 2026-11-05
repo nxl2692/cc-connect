@@ -14,9 +14,10 @@ import (
 )
 
 type progressTestSnapshot struct {
-	ReadOnly bool              `json:"read_only"`
-	Sessions []ProgressSession `json:"sessions"`
-	Selected *ProgressSession  `json:"selected"`
+	ReadOnly bool                    `json:"read_only"`
+	Queue    []ProgressQueuedRequest `json:"queue"`
+	Sessions []ProgressSession       `json:"sessions"`
+	Selected *ProgressSession        `json:"selected"`
 }
 
 func progressTestRead(t *testing.T, baseURL, query string) progressTestSnapshot {
@@ -243,4 +244,84 @@ func TestLiveProgress_FailedAndCancelledTurnsNeverDeliverPartialAnswers(t *testi
 			}
 		})
 	}
+}
+
+func TestManagementProgress_QueueFilteringPositionsAndCancellation(t *testing.T) {
+	e := usageTestEngine(t, "receipt")
+	now := time.Now().UTC()
+	first := &interactiveState{pendingMessages: []queuedMessage{
+		{progressKey: "q-alice", queuedAt: now.Add(-3 * time.Minute), userID: "alice", userName: "Alice", msgPlatform: "test", msgSessionKey: "test:shared", content: "password=private-value " + strings.Repeat("x", 1200), images: []ImageAttachment{{Data: []byte("private-image-data")}}},
+		{progressKey: "q-bob", queuedAt: now.Add(-2 * time.Minute), userID: "bob", userName: "Bob", msgPlatform: "test", msgSessionKey: "test:shared", content: "second request"},
+	}}
+	other := &interactiveState{pendingMessages: []queuedMessage{{progressKey: "q-other", userID: "bob", msgPlatform: "other", content: "independent request"}}}
+	stopped := &interactiveState{stopped: true, pendingMessages: []queuedMessage{{userID: "bob", msgPlatform: "test", content: "cancelled request"}}}
+	e.usage.observeState("first", first)
+	e.usage.observeState("other", other)
+	e.usage.observeState("stopped", stopped)
+	srv := usageTestServer(t, e)
+	// Management reads must not wait on the agent-startup lock.
+	var all progressTestSnapshot
+	func() {
+		e.interactiveMu.Lock()
+		defer e.interactiveMu.Unlock()
+		all = progressTestRead(t, srv.URL, "")
+	}()
+	if len(all.Queue) != 3 {
+		t.Fatalf("wrong pending queue: %+v", all.Queue)
+	}
+	encoded, _ := json.Marshal(all.Queue)
+	for _, secret := range []string{"private-value", "private-image-data", "cancelled request"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("queue leaked %q", secret)
+		}
+	}
+	if len([]rune(all.Queue[0].Request)) > 1003 || all.Queue[0].ImageCount != 1 {
+		t.Fatal("queue preview limit or attachment count is invalid")
+	}
+	filtered := progressTestRead(t, srv.URL, "?user=bob&platform=test")
+	if len(filtered.Queue) != 1 || filtered.Queue[0].Position != 2 || filtered.Queue[0].Key != "q-bob" || filtered.Queue[0].QueuedAt == nil || !filtered.Queue[0].QueuedAt.Equal(now.Add(-2*time.Minute)) {
+		t.Fatalf("filter renumbered queue or lost metadata: %+v", filtered.Queue)
+	}
+	first.mu.Lock()
+	first.pendingMessages = first.pendingMessages[1:]
+	first.mu.Unlock()
+	filtered = progressTestRead(t, srv.URL, "?user=bob&platform=test")
+	if len(filtered.Queue) != 1 || filtered.Queue[0].Position != 1 || filtered.Queue[0].Key != "q-bob" {
+		t.Fatalf("dequeue did not advance position with a stable key: %+v", filtered.Queue)
+	}
+	first.mu.Lock()
+	first.stopped = true
+	first.mu.Unlock()
+	if got := progressTestRead(t, srv.URL, "?user=bob&platform=test").Queue; len(got) != 0 {
+		t.Fatalf("cancelled queue remained visible: %+v", got)
+	}
+	e.usage.observeState("other", nil)
+	if got := progressTestRead(t, srv.URL, "").Queue; len(got) != 0 {
+		t.Fatalf("removed queue remained visible: %+v", got)
+	}
+}
+
+func TestManagementProgress_QueueConcurrentPolling(t *testing.T) {
+	e := usageTestEngine(t, "receipt")
+	state := &interactiveState{}
+	e.usage.observeState("queue", state)
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_ = e.progressQueue("", "")
+			}
+		}()
+	}
+	for i := 0; i < 100; i++ {
+		state.mu.Lock()
+		state.pendingMessages = []queuedMessage{{progressKey: "stable", userID: "alice", content: "request"}}
+		state.mu.Unlock()
+		state.mu.Lock()
+		state.pendingMessages = nil
+		state.mu.Unlock()
+	}
+	wg.Wait()
 }

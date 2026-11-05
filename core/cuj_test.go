@@ -2806,12 +2806,19 @@ func TestCUJ_I6_ReadOnlyProgressWithFinalOnlyDelivery(t *testing.T) {
 	// Action 2: Bob submits a follow-up to the shared queue.
 	send("second", "bob", "second task")
 	env.awaitVisible(e.i18n.T(MsgMessageQueued))
+	queued := progressTestRead(t, srv.URL, "?user=bob&platform=test").Queue
+	if len(queued) != 1 || queued[0].Request != "second task" || queued[0].Position != 1 || queued[0].QueuedAt == nil {
+		t.Fatalf("queued follow-up not visible on web: %+v", queued)
+	}
 	a.session.events <- Event{Type: EventResult, Content: "first final", Done: true}
 	env.awaitVisible("first final")
 	env.awaitSendCount(2)
 	awaitProgress("queue changes owner and clears prior output", func(v *ProgressSession) bool {
 		return v.UserID == "bob" && v.Turn == 2 && v.Preview == "" && v.Result == "" && len(v.Events) == 0
 	})
+	if got := progressTestRead(t, srv.URL, "?user=bob&platform=test").Queue; len(got) != 0 {
+		t.Fatalf("started request remains in queue: %+v", got)
+	}
 	// Permission prompts remain actionable in IM, without flushing text.
 	a.session.events <- Event{Type: EventPermissionRequest, ToolName: "shell", ToolInput: "permission input", RequestID: "perm-1"}
 	awaitProgress("permission wait shown on web", func(v *ProgressSession) bool { return v.Status == "waiting_permission" })
@@ -2830,6 +2837,9 @@ func TestCUJ_I6_ReadOnlyProgressWithFinalOnlyDelivery(t *testing.T) {
 	awaitProgress("completed answer retained", func(v *ProgressSession) bool {
 		return v.Status == "completed" && v.Finished && v.UserID == "alice" && v.Turn == 3 && v.Result == "third final"
 	})
+	if got := progressTestRead(t, srv.URL, "").Queue; len(got) != 0 {
+		t.Fatalf("completed requests remain queued: %+v", got)
+	}
 	for _, answer := range []string{"first final", "second final", "third final"} {
 		count := 0
 		for _, message := range p.getSent() {
@@ -2850,5 +2860,39 @@ func TestCUJ_I6_ReadOnlyProgressWithFinalOnlyDelivery(t *testing.T) {
 	}
 	if p.cards.Load() != 0 || len(p.getPreviewOpens()) != 0 || len(p.getPreviewUpdates()) != 0 {
 		t.Fatal("final-only mode created an IM streaming card/preview")
+	}
+}
+
+// CUJ: submit work, queue two follow-ups, then stop in the original chat.
+// The read-only web queue must disappear as soon as the engine drops it.
+func TestCUJ_I7_QueueDetailsClearWhenUserStops(t *testing.T) {
+	env := newReceiptAckEnv(t, nil)
+	env.engine.SetDisplayConfig(DisplayCfg{FinalOnly: true})
+	srv := usageTestServer(t, env.engine)
+	send := func(id, user, content string) {
+		env.engine.ReceiveMessage(env.plat, &Message{SessionKey: "test:shared", Platform: "test", UserID: user, UserName: user, MessageID: id, ReplyCtx: id, Content: content})
+	}
+	send("first", "alice", "first task")
+	env.awaitStartup()
+	close(env.startup.release)
+	env.awaitSendCount(1)
+	send("second", "bob", "second task")
+	send("third", "carol", "third task")
+	env.waitFor("queue visible in original chat", 3*time.Second, func() bool { return len(env.plat.getSent()) >= 2 })
+	queued := progressTestRead(t, srv.URL, "").Queue
+	if len(queued) != 2 || queued[0].Position != 1 || queued[1].Position != 2 || queued[0].Request != "second task" || queued[1].Request != "third task" {
+		t.Fatalf("web queue lost order or request content: %+v", queued)
+	}
+	filtered := progressTestRead(t, srv.URL, "?user=carol&platform=test").Queue
+	if len(filtered) != 1 || filtered[0].Position != 2 || filtered[0].Key != queued[1].Key {
+		t.Fatalf("user-filtered queue lost actual position: %+v", filtered)
+	}
+	send("stop", "alice", "/stop")
+	env.awaitVisible(env.engine.i18n.T(MsgExecutionStopped))
+	env.waitFor("stopped queue cleared on web", 3*time.Second, func() bool { return len(progressTestRead(t, srv.URL, "").Queue) == 0 })
+	env.startup.session.sendMu.Lock()
+	defer env.startup.session.sendMu.Unlock()
+	if len(env.startup.session.sendCalls) != 1 {
+		t.Fatal("read-only polling or stopping sent a queued request to the agent")
 	}
 }

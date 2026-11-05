@@ -521,6 +521,17 @@
       "user_input_request": "需要回答",
       "error": "执行错误",
       "hook_rejected": "重新生成输出"
+    },
+    "queue": {
+      "title": "排队中的请求",
+      "count": "{{count}} 条等待中",
+      "description": "各会话独立排队。第 1 位将在当前请求完成后执行，等待时长为已等待的时间。",
+      "empty": "当前没有排队请求。",
+      "group": "会话队列 {{number}}",
+      "position": "第 {{position}} 位",
+      "waiting": "已等待 {{minutes}} 分 {{seconds}} 秒",
+      "queuedAt": "入队时间：{{time}}",
+      "attachments": "{{images}} 张图片 · {{files}} 个文件"
     }
   }
 }

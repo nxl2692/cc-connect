@@ -538,6 +538,9 @@ type workspaceInitFlow struct {
 // The message is NOT sent to agent stdin at queue time; the event loop
 // sends it after the current turn completes to avoid mid-turn interference.
 type queuedMessage struct {
+	progressKey       string
+	queuedAt          time.Time
+	chatName          string
 	messageID         string
 	platform          Platform
 	replyCtx          any
@@ -3440,6 +3443,9 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 		return true // handled: queue-full reply sent
 	}
 	state.pendingMessages = append(state.pendingMessages, queuedMessage{
+		progressKey:       e.progress.nextQueueKey(),
+		queuedAt:          time.Now(),
+		chatName:          msg.ChatName,
 		messageID:         msg.MessageID,
 		platform:          p,
 		replyCtx:          msg.ReplyCtx,

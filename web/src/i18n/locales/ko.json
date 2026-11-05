@@ -521,6 +521,17 @@
       "user_input_request": "응답 필요",
       "error": "실행 오류",
       "hook_rejected": "출력 재생성"
+    },
+    "queue": {
+      "title": "대기 중인 요청",
+      "count": "{{count}}개 대기 중",
+      "description": "대화마다 별도의 대기열이 있습니다. 첫 번째 요청은 현재 요청이 끝나면 실행됩니다.",
+      "empty": "대기 중인 요청이 없습니다.",
+      "group": "대화 대기열 {{number}}",
+      "position": "{{position}}번째",
+      "waiting": "{{minutes}}분 {{seconds}}초 대기",
+      "queuedAt": "대기열 등록: {{time}}",
+      "attachments": "이미지 {{images}}개 · 파일 {{files}}개"
     }
   }
 }

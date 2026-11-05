@@ -5,6 +5,7 @@ import { Activity, ArrowLeft, Circle, Clock3, Eye, RefreshCw, Search, Wrench, Al
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getProjectProgress, type ProgressSnapshot } from '@/api/sessions';
+import QueueProgress from '@/pages/Chat/QueueProgress';
 
 export default function SessionProgress() {
   const { name = '' } = useParams<{ name: string }>();
@@ -66,6 +67,7 @@ export default function SessionProgress() {
       </header>
       <div className="rounded-xl bg-accent/5 border border-accent/15 px-4 py-3 text-xs text-gray-600 dark:text-gray-300 flex gap-2"><Eye size={15} className="text-accent shrink-0" />{t('progress.description')}</div>
       {error && <div role="status" className="rounded-lg px-4 py-3 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 text-xs flex gap-2"><AlertCircle size={14} />{t(data ? 'usage.stale' : 'usage.unavailable')}</div>}
+      {data && <QueueProgress requests={data.queue || []} sampledAt={data.sampled_at} />}
       <div className="grid lg:grid-cols-[280px_minmax(0,1fr)] gap-4 items-start">
         <aside className="border border-gray-200 dark:border-white/[0.08] rounded-xl bg-white dark:bg-white/[0.02] overflow-hidden">
           <div className="p-3 border-b border-gray-100 dark:border-white/[0.06] flex gap-2 items-center text-gray-400"><Search size={13} /><input aria-label={t('progress.search')} placeholder={t('progress.search')} value={filter} onChange={e=>setFilter(e.target.value)} className="text-xs bg-transparent outline-none w-full text-gray-700 dark:text-gray-200" /></div>

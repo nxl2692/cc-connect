@@ -62,6 +62,71 @@ func progressText(text string, max int) string {
 	return truncateIf(progressSecretPattern.ReplaceAllString(text, "${1}[REDACTED]"), max)
 }
 
+// ProgressQueuedRequest is a read-only view of a pending inbound request.
+// Position is within its own serialized session queue, not a global rank.
+type ProgressQueuedRequest struct {
+	Key        string     `json:"key"`
+	QueueKey   string     `json:"queue_key"`
+	SessionKey string     `json:"session_key"`
+	Platform   string     `json:"platform"`
+	UserID     string     `json:"user_id"`
+	UserName   string     `json:"user_name"`
+	ChatName   string     `json:"chat_name"`
+	Request    string     `json:"request"`
+	Position   int        `json:"position"`
+	QueuedAt   *time.Time `json:"queued_at,omitempty"`
+	ImageCount int        `json:"image_count"`
+	FileCount  int        `json:"file_count"`
+}
+
+func (p *progressStore) nextQueueKey() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.seq++
+	return fmt.Sprintf("queued-%d", p.seq)
+}
+
+// Read the actual pending slice so starts, drops, and cancellations disappear
+// immediately. Never acquire interactiveMu, which is held across agent startup.
+func (e *Engine) progressQueue(user, platform string) []ProgressQueuedRequest {
+	rows := make([]ProgressQueuedRequest, 0)
+	for queueKey, state := range e.usage.observedStates() {
+		state.mu.Lock()
+		var pending []queuedMessage
+		if !state.stopped {
+			pending = append(pending, state.pendingMessages...)
+		}
+		state.mu.Unlock()
+		for i, q := range pending {
+			if (user != "" && q.userID != user) || (platform != "" && q.msgPlatform != platform) {
+				continue
+			}
+			key := q.progressKey
+			if key == "" {
+				key = fmt.Sprintf("queued:%s:%d", queueKey, i)
+			}
+			row := ProgressQueuedRequest{
+				Key: key, QueueKey: queueKey, SessionKey: q.msgSessionKey,
+				Platform: q.msgPlatform, UserID: q.userID, UserName: q.userName, ChatName: q.chatName,
+				Request: progressText(q.content, 1000), Position: i + 1,
+				ImageCount: len(q.images), FileCount: len(q.files),
+			}
+			if !q.queuedAt.IsZero() {
+				queuedAt := q.queuedAt
+				row.QueuedAt = &queuedAt
+			}
+			rows = append(rows, row)
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].QueueKey != rows[j].QueueKey {
+			return rows[i].QueueKey < rows[j].QueueKey
+		}
+		return rows[i].Position < rows[j].Position
+	})
+	return rows
+}
+
 func (p *progressStore) begin(msg *Message, session *Session, gen uint64, now time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -84,7 +149,7 @@ func (p *progressStore) begin(msg *Message, session *Session, gen uint64, now ti
 }
 
 func (p *progressStore) beginQueued(q queuedMessage, session *Session, gen uint64, now time.Time) {
-	p.begin(&Message{Platform: q.msgPlatform, UserID: q.userID, UserName: q.userName, SessionKey: q.msgSessionKey, Content: q.content}, session, gen, now)
+	p.begin(&Message{Platform: q.msgPlatform, UserID: q.userID, UserName: q.userName, ChatName: q.chatName, SessionKey: q.msgSessionKey, Content: q.content}, session, gen, now)
 }
 
 func (p *progressStore) pruneLocked() {
@@ -291,5 +356,5 @@ func (m *ManagementServer) handleProjectProgress(w http.ResponseWriter, r *http.
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	mgmtJSON(w, http.StatusOK, map[string]any{"sampled_at": time.Now(), "sessions": list, "selected": selected, "read_only": true})
+	mgmtJSON(w, http.StatusOK, map[string]any{"sampled_at": time.Now(), "sessions": list, "selected": selected, "read_only": true, "queue": e.progressQueue(r.URL.Query().Get("user"), r.URL.Query().Get("platform"))})
 }

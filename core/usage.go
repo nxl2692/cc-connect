@@ -129,12 +129,12 @@ func (u *usageTracker) observeState(key string, state *interactiveState) {
 	}
 }
 
-func (u *usageTracker) observedStates() []*interactiveState {
+func (u *usageTracker) observedStates() map[string]*interactiveState {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	states := make([]*interactiveState, 0, len(u.states))
-	for _, state := range u.states {
-		states = append(states, state)
+	states := make(map[string]*interactiveState, len(u.states))
+	for key, state := range u.states {
+		states[key] = state
 	}
 	return states
 }
