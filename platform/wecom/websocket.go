@@ -134,7 +134,9 @@ func newWebSocket(opts map[string]any) (core.Platform, error) {
 	if wsURL == "" {
 		wsURL = wsEndpoint
 	}
-	groupReplyQuote, err := wsBoolOption(opts, "group_reply_quote", true)
+	// Replies retain the callback req_id for the native client quote. Avoid
+	// copying the question and its nested quote chain into the answer by default.
+	groupReplyQuote, err := wsBoolOption(opts, "group_reply_quote", false)
 	if err != nil {
 		return nil, err
 	}

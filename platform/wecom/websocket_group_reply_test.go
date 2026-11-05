@@ -112,7 +112,7 @@ func groupReplyTestFrame(t *testing.T, frames <-chan wsFrame) (wsFrame, string) 
 }
 
 func TestWSGroupReply_FollowupsKeepEachQuestionAndSender(t *testing.T) {
-	p, frames, messages := groupReplyTestPlatform(t, nil)
+	p, frames, messages := groupReplyTestPlatform(t, map[string]any{"group_reply_quote": true})
 	a := groupReplyTestMessage(t, p, messages, "a", "alice", "@bot 问题甲", "group")
 	b := groupReplyTestMessage(t, p, messages, "b", "bob", "@bot 问题乙", "group")
 	a2 := groupReplyTestMessage(t, p, messages, "a2", "alice", "@bot 下个问题", "group")
@@ -138,7 +138,7 @@ func TestWSGroupReply_FollowupsKeepEachQuestionAndSender(t *testing.T) {
 }
 
 func TestWSGroupReply_ReplyAlsoAttributesQuestion(t *testing.T) {
-	p, frames, messages := groupReplyTestPlatform(t, nil)
+	p, frames, messages := groupReplyTestPlatform(t, map[string]any{"group_reply_quote": true})
 	msg := groupReplyTestMessage(t, p, messages, "reply", "alice", "@bot 原问题", "group")
 	if err := p.Reply(context.Background(), msg.ReplyCtx, "处理结果"); err != nil {
 		t.Fatal(err)
@@ -150,7 +150,7 @@ func TestWSGroupReply_ReplyAlsoAttributesQuestion(t *testing.T) {
 }
 
 func TestWSGroupReply_LongAnswerReservesPrefixBytesAndMentionsOnce(t *testing.T) {
-	p, frames, messages := groupReplyTestPlatform(t, map[string]any{"group_reply_mention": true})
+	p, frames, messages := groupReplyTestPlatform(t, map[string]any{"group_reply_mention": true, "group_reply_quote": true})
 	msg := groupReplyTestMessage(t, p, messages, "long", "alice", "@bot "+strings.Repeat("问题", 300), "group")
 	answer := strings.Repeat("中文😀", 1300)
 	if err := p.Send(context.Background(), msg.ReplyCtx, answer); err != nil {
@@ -260,7 +260,7 @@ func TestWSGroupReply_ServerRejectionIsReturned(t *testing.T) {
 }
 
 func TestWSGroupReply_OversizedReplyKeepsCompleteAnswer(t *testing.T) {
-	p, frames, messages := groupReplyTestPlatform(t, nil)
+	p, frames, messages := groupReplyTestPlatform(t, map[string]any{"group_reply_quote": true})
 	msg := groupReplyTestMessage(t, p, messages, "oversized", "alice", "question", "group")
 	answer := strings.Repeat("😀中文", 2100)
 	if err := p.Reply(context.Background(), msg.ReplyCtx, answer); err != nil {
@@ -296,11 +296,68 @@ func TestWSGroupReply_DefaultDoesNotExposeOpaqueUserIDAsMention(t *testing.T) {
 			t.Fatal(err)
 		}
 		frame, text := groupReplyTestFrame(t, frames)
-		if frame.Cmd != "aibot_respond_msg" || frame.Headers.ReqID != "req-opaque" || text != "> 原问题\n\n最终结果" {
+		if frame.Cmd != "aibot_respond_msg" || frame.Headers.ReqID != "req-opaque" || text != "最终结果" {
 			t.Fatalf("default reply has invalid mention or lost attribution: frame=%+v text=%q", frame, text)
 		}
 		if strings.Contains(text, opaqueID) || strings.Contains(text, "<@") {
 			t.Fatalf("default reply exposed opaque mention: %q", text)
 		}
+	}
+}
+
+// Regression: the client already displays a native quote for aibot_respond_msg.
+// Copying the current question and its nested quote into the body duplicates a
+// potentially long chain of previous conversations above every answer.
+func TestWSGroupReply_DefaultDoesNotDuplicateNativeQuote(t *testing.T) {
+	p, frames, messages := groupReplyTestPlatform(t, nil)
+	for _, item := range []struct{ id, user string }{{"alice-question", "alice"}, {"bob-question", "bob"}} {
+		body := wsMsgCallbackBody{MsgID: item.id, ChatID: "group1", ChatType: "group", MsgType: "text",
+			Quote: &wsQuoteBlock{MsgType: "text"}}
+		body.From.UserID = item.user
+		body.Text.Content = "@bot 这个删除任务几点完成的？"
+		body.Quote.Text = &struct {
+			Content string `json:"content"`
+		}{Content: "@bot 这次是由哪次同步引起的？引用了更早的告警和分析结果"}
+		p.handleMsgCallback(wsCallbackFrame(t, "req-"+item.id, body))
+		var msg *core.Message
+		select {
+		case msg = <-messages:
+		case <-time.After(time.Second):
+			t.Fatal("callback did not deliver message")
+		}
+		if !strings.Contains(msg.ExtraContent, body.Quote.Text.Content) {
+			t.Fatal("removing the outbound preview must preserve the agent's quoted context")
+		}
+		for _, send := range []func(context.Context, any, string) error{p.Reply, p.Send} {
+			const answer = "截至当前，删除任务仍在运行。"
+			if err := send(context.Background(), msg.ReplyCtx, answer); err != nil {
+				t.Fatal(err)
+			}
+			frame, text := groupReplyTestFrame(t, frames)
+			if frame.Cmd != "aibot_respond_msg" || frame.Headers.ReqID != "req-"+item.id || text != answer {
+				t.Fatalf("native quote lost or body duplicated question: frame=%+v body=%q", frame, text)
+			}
+		}
+	}
+}
+
+func TestWSGroupReply_DefaultLongAnswerKeepsOnlyAnswerAndRequestAssociation(t *testing.T) {
+	p, frames, messages := groupReplyTestPlatform(t, nil)
+	msg := groupReplyTestMessage(t, p, messages, "long-native-quote", "alice", "@bot 原问题和历史引用链", "group")
+	// Legitimate quotes inside the answer must be preserved, not stripped.
+	answer := "> 分析结果中有意保留的引用\n\n" + strings.Repeat("中文😀", 2500)
+	if err := p.Reply(context.Background(), msg.ReplyCtx, answer); err != nil {
+		t.Fatal(err)
+	}
+	var joined strings.Builder
+	for n := len(frames); n > 0; n-- {
+		frame, text := groupReplyTestFrame(t, frames)
+		if frame.Cmd != "aibot_respond_msg" || frame.Headers.ReqID != "req-long-native-quote" || len(text) > 2000 || !utf8.ValidString(text) {
+			t.Fatalf("invalid long-answer frame: %+v", frame)
+		}
+		joined.WriteString(text)
+	}
+	if joined.String() != answer {
+		t.Fatal("answer was modified, truncated, or prefixed with a question preview")
 	}
 }
